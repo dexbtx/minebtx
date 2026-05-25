@@ -59,7 +59,10 @@ echo "=== creating btx-daemon bundle ==="
 tar czf btx-daemon.tar.gz btxd btx-cli
 ls -lh btx-daemon.tar.gz
 
-# Update SHA256SUMS to include the bundle
+# Update SHA256SUMS to include the bundle. Strip any prior bundle line
+# first so re-running this script on the same checkout doesn't append
+# duplicates.
+sed -i '/btx-daemon\.tar\.gz$/d' SHA256SUMS
 sha256sum btx-daemon.tar.gz >> SHA256SUMS
 
 # Compose release notes

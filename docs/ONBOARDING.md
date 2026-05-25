@@ -294,6 +294,17 @@ Every Friday 18:00 UTC. Single batched multi-output transaction (low on-chain fe
 ### Variance
 At small pool share, expect drought windows of 1–3 days between block finds. Pool share grows with the miner count — see `/stats` in the TG bot for current totals.
 
+### Security: plaintext stratum & payout-address rewriting (v1 caveat)
+The v1 stratum endpoint at `stratum.minebtx.com:3333` is **plaintext TCP** — there is no TLS yet. On a hostile network (open Wi-Fi, untrusted ISP, MITM-able LAN), an on-path attacker could rewrite the `mining.authorize` message and substitute their own `btx1z…` payout address for yours — your hashrate would credit them, not you. TLS is on the immediate roadmap (Caddy TCP-proxy + cert). Until then, treat the network path between your miner and the pool as something you need to actually trust. If you're on a residential ISP or datacenter rental on a known network, this is fine in practice; if you're on a coffee-shop Wi-Fi, mine somewhere else.
+
+### How the pool de-conflicts nonce space across miners (technical aside)
+Every miner connects with the same `nonce_start=0` and grinds the same nominal nonce range. Why do they not collide on duplicate work? Because the pool gives each connection a **unique `extranonce1`** at subscribe time, then bakes that extranonce into the per-worker coinbase, then sends each worker a *pre-built* `merkle_root` in the `mining.notify`. Two workers searching `nonce=0..N` are computing matmul digests against *different* `merkle_root` inputs — so they're scanning genuinely different digest spaces despite using the same nonce range.
+
+What this means in practice:
+- You don't need to configure or coordinate anything; it just works.
+- If you see a flood of `code 22 — duplicate share` rejections post-reconnect, the pool re-handed you the same extranonce1 across sessions (rare; expected during pool-server restarts). Self-corrects within 1-2 minutes.
+- If the pool ever fails to send a per-worker `merkle_root` (protocol bug), the client will reject the notify rather than mine on an empty merkle — the patched solver requires the field.
+
 ### Want to switch back to solo?
 `dexbtx-miner` is pool-only. For solo mining, use the upstream
 `btx-gbt-miner.py` from the BTX source tree — it speaks GBT directly

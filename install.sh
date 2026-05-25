@@ -22,12 +22,21 @@ set -euo pipefail
 
 # ─── Configurables ──────────────────────────────────────────────────────────
 # Pin the release tag. install.sh always pulls this version of the solver
-# binary as a release asset from the dexbtx-miner GitHub repo. Bump in
-# lockstep with the SHA256 below and pyproject.toml's `expected_sha256`.
+# binary as a release asset.
+#
+# The binary's SHA256 is the SINGLE SOURCE OF TRUTH in pyproject.toml under
+# [tool.dexbtx-miner.solver].expected_sha256. install.sh fetches that file
+# at install time and reads the hash from it (see fetch + parse block ~L170)
+# rather than carrying its own duplicate of the value. This means bumping
+# the binary requires editing exactly one place (pyproject.toml) instead of
+# three (install.sh, pyproject.toml, release-tooling/SHA256SUMS).
+#
+# EXPECTED_SHA256 env var is supported as an override for offline / mirror
+# / fork use; if set, it skips the remote pyproject.toml fetch.
 PREBUILDS_TAG="${PREBUILDS_TAG:-v4.3-sm89-native}"
-EXPECTED_SHA256="${EXPECTED_SHA256:-921c89fba785863f460ab8b23c193e4b8af729569124f45e09b5c29a26a8b120}"
 PREBUILDS_BASE="${PREBUILDS_BASE:-https://github.com/dexbtx/minebtx/releases/download/${PREBUILDS_TAG}}"
 SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve"
+PYPROJECT_URL="${PYPROJECT_URL:-https://raw.githubusercontent.com/dexbtx/minebtx/${PREBUILDS_TAG}/pyproject.toml}"
 
 # Default pool — override with --pool flag or DEXBTX_POOL env var.
 DEFAULT_POOL="${DEXBTX_POOL:-minebtx.com:3333}"
@@ -164,6 +173,25 @@ else
         *":$HOME/.local/bin:"*) : ;;
         *) warn "add to your shell rc: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
     esac
+fi
+
+# ─── Resolve EXPECTED_SHA256 from pyproject.toml (single source of truth) ─
+# Unless the user passed EXPECTED_SHA256 via env var (offline / fork use),
+# fetch the pyproject.toml from the release tag and extract the pinned hash.
+# This keeps install.sh + pyproject.toml + SHA256SUMS from drifting.
+if [[ -z "${EXPECTED_SHA256:-}" ]]; then
+    log "fetching solver SHA256 pin from ${PYPROJECT_URL}..."
+    PYPROJECT_TMP="$(mktemp)"
+    if ! curl -fsSL "$PYPROJECT_URL" -o "$PYPROJECT_TMP"; then
+        rm -f "$PYPROJECT_TMP"
+        err "could not fetch pyproject.toml from ${PYPROJECT_URL}. Pass EXPECTED_SHA256=<hash> to override."
+    fi
+    EXPECTED_SHA256="$(grep -E '^\s*expected_sha256\s*=' "$PYPROJECT_TMP" | head -1 | sed -E 's/.*"([a-f0-9]+)".*/\1/')"
+    rm -f "$PYPROJECT_TMP"
+    if [[ ! "$EXPECTED_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+        err "could not extract a 64-char SHA256 from pyproject.toml; got: ${EXPECTED_SHA256:-<empty>}"
+    fi
+    log "pinned solver SHA256 (from pyproject.toml): $EXPECTED_SHA256"
 fi
 
 # ─── Fetch + verify solver ──────────────────────────────────────────────────
@@ -380,8 +408,14 @@ fi
 # Three-assertion check (any failure aborts install):
 #   (a) solver PID visible in nvidia-smi --query-compute-apps during run
 #   (b) sustained GPU power > 100W (5060 Ti idle ~30W; engaged 150-180W)
-#   (c) effective throughput > 1000 N/s (canonical 5060 Ti is 28000+;
-#       1000 is the floor that proves the kernel ran at all)
+#   (c) effective throughput > 1000 N/s — this uses tries_used/elapsed_s
+#       which docs/TUNING.md correctly calls a misleading per-card rate
+#       metric. Here it's used ONLY as a LIVENESS FLOOR (proves the
+#       kernel did productive work, vs the CPU-fallback ~6 N/s case),
+#       NOT as a tuning measurement. 1000 N/s is well below any real
+#       GPU's actual rate (5060 Ti is 28000+) — failure means CPU
+#       fallback or catastrophic kernel-launch failure, not a tuning
+#       problem.
 #
 # If (a) fails, the binary lacks a kernel image compatible with this
 # driver/GPU. The fix is ALWAYS to ship a binary that supports the user's

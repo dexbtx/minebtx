@@ -42,11 +42,25 @@ class MinerConfig:
     solver_backend: str = "cuda"                # BTX_MATMUL_BACKEND (cuda|cpu|metal|mlx)
     gpu_inputs: int | None = 0                  # BTX_MATMUL_GPU_INPUTS (must be 0 — the saturation breakthrough)
 
-    # Nonces tried per solver invocation before checking for new work from
-    # the pool. The kernel returns early when it finds a share, so this is a
-    # ceiling; 20M is comfortable for the canonical workers=16/threads=8
-    # profile.
+    # Ceiling on nonces tried per solver invocation. In practice this is
+    # rarely the binding limit — `solver_max_seconds_per_slice` bounds
+    # each slice first on every modern GPU. Effectively a safety cap so a
+    # broken solver can't run away with a single multi-billion-nonce slice.
     nonces_per_slice: int = 20_000_000
+
+    # How long a single solver slice runs before returning. Shorter slices
+    # mean LESS wasted work when a new block lands network-wide and the
+    # pool sends us a fresh job — the miner can re-check `_current_job`
+    # between slices and abandon stale work sooner.
+    #
+    # At BTX's 90s target block time, a 5s slice caps the per-block waste
+    # at ~5.5% (vs ~17% with the old 30s default). With daemon mode the
+    # per-slice overhead is ~ms (CUDA context persists across slices), so
+    # shorter slices are essentially free.
+    #
+    # Don't go below ~2s: the kernel needs enough wall time to amortise
+    # the per-launch dispatch cost on slower cards (Pascal-class).
+    solver_max_seconds_per_slice: float = 5.0
 
     # Reconnect with exponential backoff bounded by these.
     reconnect_initial_s: float = 1.0
