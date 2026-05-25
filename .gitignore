@@ -12,13 +12,15 @@ venv/
 .venv/
 env/
 
-# Solver binaries (downloaded by install.sh / fetched from GitHub releases)
+# Solver binaries + release bundles (downloaded by install.sh, generated
+# at release time, or fetched from GitHub releases — never committed).
 btx-gbt-solve
 btxd
 btx-cli
 btx-gbt-miner.py
 *.cubin
 *.ptx
+*.tar.gz
 
 # Local config / runtime state
 ~/.dexbtx-miner/

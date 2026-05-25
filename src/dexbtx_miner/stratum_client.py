@@ -34,36 +34,6 @@ from .gbt_solve_wrapper import (
 log = logging.getLogger(__name__)
 
 
-def _target_hex_to_compact_bits(target_hex: str) -> str:
-    """Convert a 256-bit target (big-endian hex) to Bitcoin compact-bits hex.
-
-    Mirrors src/arith_uint256.cpp::GetCompact() in Bitcoin Core: pack the most
-    significant 3 bytes of the target with the byte-length as exponent, and
-    handle the sign-bit-collision case by shifting one byte right.
-    """
-    s = target_hex.removeprefix("0x").lower()
-    if len(s) % 2:
-        s = "0" + s
-    target_bytes = bytes.fromhex(s).rjust(32, b"\x00")[-32:]
-    # Strip whole leading zero BYTES (not nibbles).
-    idx = 0
-    while idx < 32 and target_bytes[idx] == 0:
-        idx += 1
-    if idx == 32:
-        return "00000000"
-    significant = target_bytes[idx:]
-    size = len(significant)
-    if size < 3:
-        mantissa = int.from_bytes(significant + b"\x00" * (3 - size), "big")
-    else:
-        mantissa = int.from_bytes(significant[:3], "big")
-    if mantissa & 0x800000:
-        mantissa >>= 8
-        size += 1
-    compact = (size << 24) | (mantissa & 0x00ffffff)
-    return f"{compact:08x}"
-
-
 @dataclasses.dataclass
 class Job:
     """Parsed mining.notify payload (matmul-extended)."""
@@ -89,7 +59,7 @@ class Job:
         )
 
     def to_solve_challenge(self) -> SolveChallenge:
-        """Build a SolveChallenge for the polling-mode wrapper.
+        """Build a SolveChallenge for the daemon-mode wrapper.
 
         `--bits` MUST be the block bits because nBits is hashed into the
         matmul digest (matmul_pow.cpp::ComputeMatMulHeaderHash). The pool's
@@ -100,11 +70,25 @@ class Job:
         uses this to exit on share-tier hits while keeping header.nBits at
         the block bits — so the digest matches what the pool recomputes.
 
-        Falls back gracefully on unpatched solvers: they ignore the extra
-        arg and just mine at block target (solo-via-pool semantics).
+        Raises `ValueError` if the pool omits the matmul metadata fields
+        the solver needs — failing loud beats silently mining for height 0
+        with all-zero seeds (which produces 100% rejected shares with no
+        clear diagnostic).
         """
         compact_bits = self.bits
         share_target_hex = self.target if self.target else None
+
+        # Fail loud on missing matmul metadata. The pool MUST send these in
+        # every notify; if it doesn't, we shouldn't silently invent values
+        # (silently mining at height 0 with empty seeds = 100% rejects).
+        required_matmul_keys = ("seed_a", "seed_b", "block_height")
+        missing = [k for k in required_matmul_keys if k not in self.matmul]
+        if missing:
+            raise ValueError(
+                f"notify missing required matmul fields: {missing} "
+                f"(got keys: {sorted(self.matmul.keys())}); "
+                f"refusing to mine with placeholder values"
+            )
 
         return SolveChallenge(
             version=self.version,
@@ -112,9 +96,9 @@ class Job:
             merkle_root=self.merkleroot,
             time=self.time,
             bits=compact_bits,
-            seed_a=self.matmul.get("seed_a", ""),
-            seed_b=self.matmul.get("seed_b", ""),
-            block_height=int(self.matmul.get("block_height", 0)),
+            seed_a=self.matmul["seed_a"],
+            seed_b=self.matmul["seed_b"],
+            block_height=int(self.matmul["block_height"]),
             matmul_n=int(self.matmul.get("matmul_n", 512)),
             matmul_b=int(self.matmul.get("matmul_b", 16)),
             matmul_r=int(self.matmul.get("matmul_r", 8)),
@@ -332,6 +316,7 @@ class StratumClient:
                     challenge,
                     nonce_start=nonce_start,
                     max_tries=self.cfg.nonces_per_slice,
+                    max_seconds=self.cfg.solver_max_seconds_per_slice,
                 )
                 if self._current_job is None or self._current_job.job_id != job.job_id:
                     log.debug("dropping result for stale job %s", job.job_id)

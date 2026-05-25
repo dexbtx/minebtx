@@ -50,10 +50,17 @@ solver_pipeline_async: 1         # BTX_MATMUL_PIPELINE_ASYNC (overlap prep+kerne
 gpu_inputs: 0
 
 # ─── Slice sizing ────────────────────────────────────────────────────────
-# Nonces tried per solver invocation. 20M is a comfortable upper bound
-# for the canonical workers=16/threads=8 config; the kernel will return
-# early when it finds a share-target hit, so this is just a ceiling.
+# Nonces tried per solver invocation. Safety ceiling; in practice
+# solver_max_seconds_per_slice (below) binds first on every modern GPU.
 nonces_per_slice: 20000000
+
+# How long a single solver slice runs before returning to the loop.
+# Shorter slices = less wasted work when a new block lands network-wide
+# (BTX target 90s) — the miner re-checks the job between slices and
+# abandons stale work sooner. 5s caps per-block waste at ~5.5%.
+# Daemon mode keeps the CUDA context across slices, so per-slice
+# overhead is ~ms. Don't drop below 2s on slow CPUs.
+solver_max_seconds_per_slice: 5.0
 
 # ─── Reconnect backoff ───────────────────────────────────────────────────
 reconnect_initial_s: 1.0

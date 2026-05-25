@@ -1,32 +1,32 @@
-"""Async wrapper around BTX's `btx-gbt-solve` standalone solver.
+"""Async wrapper around BTX's patched `btx-gbt-solve` solver, in **daemon mode**.
 
-Solver contract (verified against upstream v0.30.1):
-  btx-gbt-solve --version <int> --prev-hash <hex64> --merkle-root <hex64>
-                --time <uint32> --bits <hex compact> --seed-a <hex64>
-                --seed-b <hex64> --block-height <int>
-                [--matmul-n <uint16>] [--matmul-b <uint32>] [--matmul-r <uint32>]
-                [--epsilon-bits <uint32>] [--nonce-start <uint64>]
-                [--max-tries <uint64>] [--max-seconds <double>]
-                [--backend <cpu|cuda|metal|mlx>] [--solver-threads <N>]
-                [--batch-size <N>] [--async <0|1>] [--pool-slots <N>]
+Requires a patched solver build with TWO flags upstream doesn't ship:
+  --daemon         : keep the CUDA context + cubins loaded across slices,
+                     reading per-slice JSON jobs on stdin and emitting one
+                     JSON result line on stdout. Eliminates the ~5s
+                     CUDA-context-init cost that would otherwise apply
+                     every slice.
+  --share-target   : exit early on `digest <= share_target` instead of
+                     only on `digest <= block_target` (block target is
+                     impossibly hard at the per-miner share rate; without
+                     this flag, the solver runs until max_seconds, never
+                     returning a found share).
 
-Outputs ONE JSON line on stdout. Schema (per src/btx-gbt-solve.cpp):
-  - found: bool
-  - tries_used: uint64
-  - elapsed_s: float
-  - nonce: uint64 (only if found)
-  - digest: hex64 (only if found)
-  - matrix_c_words: array (only if found)
-  + other fields
+`install.sh` verifies both flags are present and aborts if either is
+missing — there is no fallback path for a stock-upstream binary.
 
-This is a **polling-mode** wrapper: one invocation per nonce slice. The
-stratum_client.py drives this in a loop, advancing nonce_start by tries_used
-after each slice. Works against stock upstream `btx-gbt-solve` with no patches.
+Daemon-mode protocol (read this code's `solve_slice` for the JSON shape):
+  - one job at a time per process (guarded by `_daemon_lock`)
+  - one result JSON per job, on stdout
+  - solver daemon prints `{"event":"daemon_ready"}` on stderr at startup
+  - if the daemon dies mid-job we respawn once and retry; persistent
+    failure surfaces as SolveResult(found=False, tries_used=0)
 
-The `--bits` we pass is the POOL'S SHARE TARGET (not the block target). The
-solver searches for nonces whose matmul digest meets that target. The pool
-server validates shares against both the share target (for credit) and the
-block target (for submitblock).
+The `--bits` we pass is the BLOCK target (header.nBits is hashed into the
+matmul digest). The patched solver does the share-tier early exit via
+`--share-target`, not by lowering --bits. The pool server validates each
+returned share against both the share target (for credit) and the block
+target (for submitblock).
 """
 
 from __future__ import annotations
@@ -240,12 +240,13 @@ class GbtSolveWrapper:
             if self._daemon.stdin is not None and not self._daemon.stdin.is_closing():
                 self._daemon.stdin.close()
             await asyncio.wait_for(self._daemon.wait(), timeout=5.0)
-        except (asyncio.TimeoutError, Exception):
+        except asyncio.TimeoutError:
+            # Daemon ignored stdin close — escalate to SIGKILL.
             try:
                 self._daemon.kill()
                 await self._daemon.wait()
-            except Exception:
-                pass
+            except ProcessLookupError:
+                pass  # already exited between timeout and kill
         self._daemon = None
         self._matmul_params = None
 
@@ -277,7 +278,10 @@ class GbtSolveWrapper:
             "block_height": challenge.block_height,
             "nonce_start": nonce_start,
             "max_tries": max_tries,
-            "max_seconds": max_seconds if max_seconds > 0 else 30.0,
+            # Default to 5s rather than 30s — at BTX's 90s target block
+            # time, longer slices are pure waste on `clean_jobs=true`
+            # notifies (see config.py:solver_max_seconds_per_slice).
+            "max_seconds": max_seconds if max_seconds > 0 else 5.0,
         }
         if challenge.share_target_hex:
             job["share_target"] = challenge.share_target_hex
@@ -295,6 +299,10 @@ class GbtSolveWrapper:
         challenge: SolveChallenge,
         job: dict[str, Any],
     ) -> dict[str, Any] | None:
+        # Bounded backoff so a fundamentally broken binary doesn't tight-loop:
+        # ~60s of handshake timeouts × infinite retries would burn CPU and
+        # spam the log. Two attempts max per slice; the outer solver loop
+        # handles longer-term retry pacing.
         for attempt in (1, 2):
             try:
                 daemon = await self._ensure_daemon(challenge)
@@ -314,11 +322,14 @@ class GbtSolveWrapper:
                     log.warning("daemon reported job error: %s", rec["error"])
                     return None
                 return rec
-            except (asyncio.TimeoutError, ConnectionError, json.JSONDecodeError, BrokenPipeError, Exception) as e:
+            except (asyncio.TimeoutError, ConnectionError, json.JSONDecodeError, BrokenPipeError) as e:
                 log.warning("daemon I/O failed (attempt %d): %s", attempt, e)
                 await self._shutdown_daemon()
                 if attempt == 2:
                     return None
+                # Backoff before respawning. Linear is fine — the outer
+                # solver loop handles the longer-term pacing.
+                await asyncio.sleep(1.0)
         return None
 
     def _result_from_record(self, rec: dict[str, Any], challenge: SolveChallenge) -> SolveResult:

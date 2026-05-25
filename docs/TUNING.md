@@ -35,7 +35,8 @@ sub-95% sustained, bump both together (typically 8→16 and 4→8).
 ## Per-GPU measured profiles
 
 Every entry below was measured on real hardware via a parameter sweep
-during pool onboarding. The "Power %" column is sustained draw as a
+during pool onboarding, on **hosts with ≥(workers + threads) effective
+vCPUs and ≥8 GB RAM**. The "Power %" column is sustained draw as a
 percentage of the card's spec TDP — anything near 100% means the
 kernel is fully saturating the GPU's power-frequency curve.
 
@@ -53,6 +54,17 @@ Cards not in the table (RTX 30-series consumer, 40-series consumer
 beyond 4060 Ti, 5080, 5090, H100, etc.): start at the **universal
 default** `workers=16 / threads=8 / batch=128 / prefetch=8` and run the
 benchmark. The installer auto-writes this profile for any unknown GPU.
+
+**Caveat on the "universal" framing**: on a host whose CPU is *much*
+slower than the GPU class (e.g. a 5070-class GPU paired with a
+quad-core Celeron), the kernel may genuinely be GPU-bound and `workers`
+may not move the needle as much as it did in the rentals we tested.
+The "PREPARE_WORKERS + SOLVER_THREADS are the dominant levers" claim
+holds where CPU input prep is the realistic bottleneck — which is
+every host class we shipped on — but is not a law of physics. If you
+have an unusual host pairing, the on-rig `dexbtx-miner benchmark`
+sweep is the source of truth, not this table. PRs adding data points
+welcome.
 
 ### Why Pascal caps at 83%
 
