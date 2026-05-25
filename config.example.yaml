@@ -1,0 +1,63 @@
+# dexbtx-miner — example configuration.
+#
+# Copy this to ~/.dexbtx-miner/config.yaml and set your payout_address.
+# install.sh auto-writes a tuned config based on your detected GPU;
+# this file is just a documented template for hand-editing.
+
+# ─── Pool connection ─────────────────────────────────────────────────────
+pool_host: "minebtx.com"
+pool_port: 3333
+pool_tls: false
+
+# ─── Identity ────────────────────────────────────────────────────────────
+# REQUIRED. Your transparent BTX payout address (btx1z...). Get one via
+# `btx-cli getnewaddress` if you run your own btxd, or follow the wallet
+# quickstart at https://minebtx.com.
+payout_address: "btx1z...YOUR_BTX_ADDRESS_HERE..."
+# Short label shown on the dashboard so you can tell rigs apart.
+# Recommended pattern: "<alias>-<gpu>-<country2>-<color>" (four parts,
+# all lowercase) so multiple miners with identical hardware don't
+# collide on the public dashboard. Examples:
+#   "kappa-5060ti-us-blue"
+#   "bravo-1070-de-red"
+#   "tango-4060ti-ca-green"
+# Don't put your real name here — anyone can see it on the dashboard.
+worker_name: "default"
+
+# ─── Solver binary ───────────────────────────────────────────────────────
+# Path to btx-gbt-solve. install.sh drops it at this default location.
+gbt_solve_path: "~/.dexbtx-miner/bin/btx-gbt-solve"
+
+# ─── Solver tuning ───────────────────────────────────────────────────────
+# Universal default for all NVIDIA GPUs Pascal through Blackwell.
+# See docs/TUNING.md for the per-card measured profile table.
+#
+# The two levers that matter most: solver_prepare_workers (CPU input
+# generators) and solver_threads (CPU solver workers). If GPU util is
+# below 95% sustained, BUMP THESE FIRST. Batch size has no meaningful
+# effect on steady-state throughput once prep is sized correctly.
+solver_backend: "cuda"
+solver_threads: 8                # BTX_MATMUL_SOLVER_THREADS  ← KEY LEVER (bump with workers)
+solver_prepare_workers: 16       # BTX_MATMUL_PREPARE_WORKERS ← KEY LEVER (bump with threads)
+solver_batch_size: 128           # BTX_MATMUL_SOLVE_BATCH_SIZE
+solver_prefetch_depth: 8         # BTX_MATMUL_PREPARE_PREFETCH_DEPTH
+solver_pipeline_async: 1         # BTX_MATMUL_PIPELINE_ASYNC (overlap prep+kernel)
+
+# MANDATORY. Generates matmul inputs on the CPU instead of the GPU.
+# Despite the name, gpu_inputs=0 is what makes Blackwell + every other
+# modern card actually saturate. The default was the wrong way around
+# in the upstream BTX matmul backend for months.
+gpu_inputs: 0
+
+# ─── Slice sizing ────────────────────────────────────────────────────────
+# Nonces tried per solver invocation. 20M is a comfortable upper bound
+# for the canonical workers=16/threads=8 config; the kernel will return
+# early when it finds a share-target hit, so this is just a ceiling.
+nonces_per_slice: 20000000
+
+# ─── Reconnect backoff ───────────────────────────────────────────────────
+reconnect_initial_s: 1.0
+reconnect_max_s: 60.0
+
+# ─── Logging ─────────────────────────────────────────────────────────────
+log_level: "INFO"

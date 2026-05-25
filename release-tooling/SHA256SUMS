@@ -1,0 +1,7 @@
+# btx-gbt-solve v4.3 — native sm_61 + sm_89 + sm_90 + sm_120 cubins
+921c89fba785863f460ab8b23c193e4b8af729569124f45e09b5c29a26a8b120 *btx-gbt-solve
+# btxd + btx-cli for users running their own node alongside the miner
+03ee2a0e9832839d871e7c4364724b31f03bc71614b3c561ac19993f6c5ffa77 *btxd
+bd305e132d277c0e63db9fb4218b2f9a05323b835979fd207811c94688ac46d0 *btx-cli
+# btx-gbt-miner.py — legacy solo-mining orchestrator (not used for pool)
+0c4f8097c3a1453dfe4adc827a232b83e81fa5f39b0eb36405b4241872f99701 *btx-gbt-miner.py

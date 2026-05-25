@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+venv/
+.venv/
+env/
+
+# Solver binaries (downloaded by install.sh / fetched from GitHub releases)
+btx-gbt-solve
+btxd
+btx-cli
+btx-gbt-miner.py
+*.cubin
+*.ptx
+
+# Local config / runtime state
+~/.dexbtx-miner/
+config.yaml         # use config.example.yaml as a template
+miner.log
+*.bak
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage

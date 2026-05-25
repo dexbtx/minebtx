@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dexbtx-miner"
+version = "0.2.0"
+description = "DEXBTX native stratum miner. Wraps btx-gbt-solve and speaks stratum/2.0-matmul."
+# Python 3.10+ supported. The codebase uses PEP 604 unions and dataclass
+# match (3.10), no 3.11-only syntax.
+requires-python = ">=3.10"
+authors = [{ name = "DEXBTX" }]
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[project.scripts]
+dexbtx-miner = "dexbtx_miner.__main__:main"
+
+# Pin the expected btx-gbt-solve binary SHA256. The installer downloads
+# the binary, verifies this hash, refuses to run on mismatch. Bump this
+# field in lockstep with the prebuilds release.
+[tool.dexbtx-miner.solver]
+expected_sha256 = "921c89fba785863f460ab8b23c193e4b8af729569124f45e09b5c29a26a8b120"
+prebuilds_release = "v4.3-sm89-native"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dexbtx_miner"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
