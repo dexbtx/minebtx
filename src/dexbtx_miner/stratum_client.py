@@ -201,8 +201,11 @@ class StratumClient:
             self._pending.clear()
 
     async def _handshake(self) -> None:
-        # mining.subscribe
-        sub = await self._call("mining.subscribe", ["dexbtx-miner/0.1.0"])
+        # mining.subscribe — reports our package version so the pool's
+        # `stratum_sessions.agent_string` column shows e.g. "dexbtx-miner/0.2.1".
+        # Lets ops query which clients have which fixes deployed.
+        from . import USER_AGENT
+        sub = await self._call("mining.subscribe", [USER_AGENT])
         # Per stratum: [[[notify, sid]], extranonce1, extranonce2_size]
         try:
             self._extranonce1 = sub[1]
