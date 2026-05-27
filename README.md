@@ -180,36 +180,39 @@ steady-state throughput once prep is sized correctly.
 
 ## Architecture coverage (which GPUs work)
 
-The shipped `btx-gbt-solve` binary embeds native cubins for **six
-GPU architectures** — no JIT-fallback dependencies for any of the
-dominant consumer cards:
+The shipped `btx-gbt-solve` binary (`v4.3-sm89-native`) embeds native
+cubins for sm_61 (Pascal), sm_89 (Ada Lovelace), sm_90 (Hopper), and
+sm_120 (Blackwell) — plus PTX for runtime JIT to other arches:
 
 | Card | Path |
 |---|---|
 | GTX 1070 / Pascal sm_61 | Native sm_61 cubin |
-| RTX 20-series / T4 / Turing sm_75 | Native sm_75 cubin |
-| RTX 30-series / Ampere consumer sm_86 | Native sm_86 cubin |
+| Volta / Turing / Ampere (sm_70–sm_86) | sm_61 PTX → JIT to your arch |
 | RTX 40-series / Ada sm_89 | Native sm_89 cubin |
 | Hopper sm_90 (H100, H200) | Native sm_90 cubin |
 | RTX 50-series / Blackwell sm_120 | Native sm_120 cubin |
 
-Earlier dexbtx-miner releases (≤ v0.2.2) shipped only 4 native cubins
-(sm_61, sm_89, sm_90, sm_120) and relied on the embedded sm_61 PTX to
-JIT-compile to Turing / Ampere at driver load. That worked on CUDA
-12.x but **broke on CUDA 13** — NVIDIA progressively deprecates older
-PTX targets each major CUDA release, and CUDA 13's driver no longer
-accepts compute_61 PTX as a JIT source. **v0.2.3 closes that gap by
-shipping native cubins for the missing Turing + Ampere consumer
-arches.** No more JIT dependencies for the dominant consumer GPUs.
+### ⚠️ Known issue: CUDA 13 + Ampere/Turing silent CPU fallback
 
-Data-center Ampere (sm_80 — A100, A40, L40) and Volta (sm_70 — V100)
-still rely on PTX fallback. File an issue if you have one of those
-and we'll add it in a future build.
+If `nvidia-smi` reports CUDA 13.x AND your GPU is sm_70–sm_86 (Volta,
+Turing, Ampere — RTX 20-series / 30-series), the sm_61 PTX → newer-arch
+JIT path silently fails because CUDA 13 deprecated compute_61 as a JIT
+source. The solver falls back to CPU silently.
+
+**We tried to fix this with v4.4 (native sm_75 + sm_86 cubins) but the
+v4.4 build had a regression that produced incorrect matmul digests
+when running on Pascal sm_61. v4.4 has been rescinded. The fix is
+being rebuilt as v4.5.** Until v4.5 lands, CUDA 13 + Ampere/Turing
+users either need to:
+
+1. **Wait for v4.5** (under active troubleshooting)
+2. **Stay on CUDA 12.x** (the canonical NVIDIA driver/toolkit version
+   that respects sm_61 PTX) — we won't make a public driver-downgrade
+   recommendation but the option exists
 
 If `install.sh`'s smoke test fails with "binary lacks compatible
 kernel image" — **do not downgrade your driver**. Open an issue with
-your `nvidia-smi -q` output and we'll ship a build that covers your
-hardware.
+your `nvidia-smi -q` output and we'll prioritize your arch in v4.5.
 
 ---
 

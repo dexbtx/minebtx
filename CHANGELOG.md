@@ -4,6 +4,44 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.4] — 2026-05-27 (EMERGENCY ROLLBACK)
+
+### Reverted
+- **`PREBUILDS_TAG` reverted to `v4.3-sm89-native`** (was `v4.4-sm75-sm86`).
+- `expected_sha256` reverted to `921c89fb...` (v4.3's binary).
+- v4.4-sm75-sm86 release rescinded from GitHub.
+
+### Why
+The v4.4 binary shipped in v0.2.3 had a regression that broke matmul
+digest computation on Pascal (sm_61). Symptoms: every share submission
+rejected with code-23 (`digest >= share_target`) because the miner's
+locally-computed digest didn't match what the pool re-computes. The
+binary was structurally sound (all cubins present, daemon mode and
+share-target flags intact) but produced incorrect digests on at least
+sm_61. Anyone on a fresh install of v0.2.3 mining with a Pascal GPU
+would have produced 100% rejected shares.
+
+Reproduction (controlled test 2026-05-27):
+- home-1070 with v4.4 binary: 0 accepted shares in 7+ minutes, 100%
+  code-23 rejection
+- home-1070 with v4.3 binary: 2 accepted shares in 7 minutes (normal
+  rate for a Pascal 1070 at ~200-400 N/s)
+- Same hardware, same config, same pool, same job — only difference
+  was the binary
+
+### Side-effect of the rollback
+The CUDA 13 + Ampere/Turing silent-CPU-fallback issue from v0.2.2 and
+earlier is BACK. Users on RTX 20-series / 30-series with CUDA 13 will
+again see install.sh's smoke test fail. **This is being addressed in
+v4.5** (currently under troubleshooting — the build pipeline that
+produced v4.4 produces correct code for sm_89/sm_90/sm_120 but
+something in the multi-arch combination broke sm_61 codegen).
+
+### No protocol or config changes
+Same stratum protocol, same per-session vardiff math, same payout
+flow. Users who didn't reinstall during the v0.2.3 window were
+already on v4.3 and were unaffected throughout.
+
 ## [0.2.3] — 2026-05-27
 
 ### Added — solver binary `btx-gbt-solve` v4.4 with native Turing + Ampere cubins
