@@ -180,44 +180,36 @@ steady-state throughput once prep is sized correctly.
 
 ## Architecture coverage (which GPUs work)
 
-The shipped `btx-gbt-solve` binary embeds native cubins for sm_61
-(Pascal), sm_89 (Ada Lovelace), sm_90 (Hopper), and sm_120 (Blackwell)
-— plus PTX so the driver can JIT to any newer-or-compatible arch:
+The shipped `btx-gbt-solve` binary embeds native cubins for **six
+GPU architectures** — no JIT-fallback dependencies for any of the
+dominant consumer cards:
 
-| Card | Path | Confirmed working on |
-|---|---|---|
-| GTX 1070 / Pascal sm_61 | Native sm_61 cubin | Any supported driver |
-| Volta / Turing / Ampere (sm_70–sm_86) | sm_61 PTX → JIT to your arch | CUDA 12.x and earlier |
-| RTX 40-series / Ada (sm_89) | Native sm_89 cubin | Any supported driver |
-| Hopper (sm_90, H100) | Native sm_90 cubin | Any supported driver |
-| RTX 50-series / Blackwell (sm_120) | Native sm_120 cubin | Any supported driver |
+| Card | Path |
+|---|---|
+| GTX 1070 / Pascal sm_61 | Native sm_61 cubin |
+| RTX 20-series / T4 / Turing sm_75 | Native sm_75 cubin |
+| RTX 30-series / Ampere consumer sm_86 | Native sm_86 cubin |
+| RTX 40-series / Ada sm_89 | Native sm_89 cubin |
+| Hopper sm_90 (H100, H200) | Native sm_90 cubin |
+| RTX 50-series / Blackwell sm_120 | Native sm_120 cubin |
 
-### ⚠️ Known issue: CUDA 13 + Ampere (RTX 30-series, A100, A40, etc.)
+Earlier dexbtx-miner releases (≤ v0.2.2) shipped only 4 native cubins
+(sm_61, sm_89, sm_90, sm_120) and relied on the embedded sm_61 PTX to
+JIT-compile to Turing / Ampere at driver load. That worked on CUDA
+12.x but **broke on CUDA 13** — NVIDIA progressively deprecates older
+PTX targets each major CUDA release, and CUDA 13's driver no longer
+accepts compute_61 PTX as a JIT source. **v0.2.3 closes that gap by
+shipping native cubins for the missing Turing + Ampere consumer
+arches.** No more JIT dependencies for the dominant consumer GPUs.
 
-If `nvidia-smi` reports **CUDA 13.x** AND your GPU is sm_70–sm_86
-(Volta, Turing, Ampere — RTX 20-series / 30-series / many data-center
-cards), the JIT path above won't work. NVIDIA progressively deprecates
-older PTX targets each CUDA release, and CUDA 13 no longer accepts
-compute_61 PTX as a JIT source. The binary has nothing to load and
-falls back to CPU silently.
-
-**This is a binary-coverage gap on our end, not something you can fix
-by changing your environment. Please do not downgrade your driver.**
-
-Workarounds while we ship a fix:
-
-1. **Wait for the next dexbtx-miner release** (in flight) — it'll
-   include native sm_75 and sm_86 cubins so this works out of the box
-   on CUDA 13.
-2. **Build the solver yourself** if you can't wait — clone the BTX
-   source and add `75` and `86` to `CMAKE_CUDA_ARCHITECTURES` in the
-   solver's CMakeLists.txt. The resulting binary drops into
-   `~/.dexbtx-miner/bin/btx-gbt-solve` and just works.
+Data-center Ampere (sm_80 — A100, A40, L40) and Volta (sm_70 — V100)
+still rely on PTX fallback. File an issue if you have one of those
+and we'll add it in a future build.
 
 If `install.sh`'s smoke test fails with "binary lacks compatible
-kernel image" and you're NOT on CUDA 13, that's a different gap —
-open an issue with your `nvidia-smi -q` output and we'll ship a build
-that covers your hardware.
+kernel image" — **do not downgrade your driver**. Open an issue with
+your `nvidia-smi -q` output and we'll ship a build that covers your
+hardware.
 
 ---
 
@@ -252,15 +244,10 @@ nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader
 ```
 
 If `btx-gbt-solve` isn't listed while the miner is running, the
-binary fell back to CPU silently.
-
-**First check `nvidia-smi` for the CUDA version.** If it reports CUDA
-13.x and you have a 30-series / Ampere / Turing / Volta GPU, you've
-hit the known CUDA 13 + sm_61 PTX gap — see "Architecture coverage"
-above for workarounds. **Don't downgrade your driver.**
-
-If you're not on CUDA 13, file an issue with your `nvidia-smi -q`
-output and we'll ship a build that covers your hardware.
+binary fell back to CPU silently. v0.2.3 ships native cubins for
+sm_61 / sm_75 / sm_86 / sm_89 / sm_90 / sm_120, so this should be
+rare. File an issue with your `nvidia-smi -q` output and we'll ship
+a build that covers your hardware. **Don't downgrade your driver.**
 
 ---
 

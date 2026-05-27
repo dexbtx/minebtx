@@ -33,7 +33,7 @@ set -euo pipefail
 #
 # EXPECTED_SHA256 env var is supported as an override for offline / mirror
 # / fork use; if set, it skips the remote pyproject.toml fetch.
-PREBUILDS_TAG="${PREBUILDS_TAG:-v4.3-sm89-native}"
+PREBUILDS_TAG="${PREBUILDS_TAG:-v4.4-sm75-sm86}"
 PREBUILDS_BASE="${PREBUILDS_BASE:-https://github.com/dexbtx/minebtx/releases/download/${PREBUILDS_TAG}}"
 SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve"
 PYPROJECT_URL="${PYPROJECT_URL:-https://raw.githubusercontent.com/dexbtx/minebtx/${PREBUILDS_TAG}/pyproject.toml}"
