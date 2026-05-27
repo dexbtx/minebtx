@@ -198,8 +198,8 @@ older releases hit: v0.2.2 and earlier shipped only sm_61/89/90/120
 native and relied on the sm_61 PTX section to JIT-compile to sm_75 /
 sm_86 at driver load. CUDA 13 deprecated compute_61 as a JIT source,
 breaking that path for every 20- and 30-series miner on a current
-driver. v0.2.5 ships the missing arches as native cubins, no JIT
-dependency.
+driver. From v0.2.5 onward the missing arches ship as native cubins,
+no JIT dependency.
 
 **If you tried v0.2.4 on an RTX 20-series or 30-series and saw silent
 CPU fallback:** that was the temporary state after the v0.2.3 rollback
