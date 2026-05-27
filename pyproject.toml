@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dexbtx-miner"
-version = "0.2.4"
+version = "0.2.5"
 description = "DEXBTX native stratum miner. Wraps btx-gbt-solve and speaks stratum/2.0-matmul."
 # Python 3.10+ supported. The codebase uses PEP 604 unions and dataclass
 # match (3.10), no 3.11-only syntax.
@@ -24,8 +24,8 @@ dexbtx-miner = "dexbtx_miner.__main__:main"
 # the binary, verifies this hash, refuses to run on mismatch. Bump this
 # field in lockstep with the prebuilds release.
 [tool.dexbtx-miner.solver]
-expected_sha256 = "921c89fba785863f460ab8b23c193e4b8af729569124f45e09b5c29a26a8b120"
-prebuilds_release = "v4.3-sm89-native"
+expected_sha256 = "ab70a6bc6a3756c5adbc85d7eba90bca370b39b4b6acb8610b45cca994771b98"
+prebuilds_release = "v4.4-sm75-sm86"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dexbtx_miner"]

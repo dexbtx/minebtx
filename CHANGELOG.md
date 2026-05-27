@@ -4,6 +4,51 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.5] — 2026-05-27 (REVERTS 0.2.4 — RESTORES v4.4 BINARY)
+
+### Reverted
+- **Reverts the v0.2.4 emergency rollback.** `PREBUILDS_TAG` is back to
+  `v4.4-sm75-sm86`; `expected_sha256` is back to `ab70a6bc...` (v4.4's
+  binary). v4.4-sm75-sm86 GitHub release re-created with the same binary.
+
+### Why 0.2.4 was wrong
+The v0.2.4 rollback was triggered by a controlled test on a GTX 1070
+(Pascal sm_61) that observed 0 accepted shares in 7+ minutes with v4.4,
+attributed to "100% code-23 rejection from wrong digests." Re-investigation
+2026-05-27 proved that conclusion was a false positive:
+
+- **v4.4's sm_61 matmul cubin** (SHA `fe7d947a...`) is **byte-identical**
+  to v4.3's sm_61 matmul cubin.
+- **v4.4's sm_61 oracle cubin** (SHA `1a28324b...`) is **byte-identical**
+  to v4.3's sm_61 oracle cubin.
+- **v4.4's host `.text` section** (1.7 MB at offset `0x1e380`) is
+  **byte-identical** to v4.3's host `.text` section.
+- The only structural difference between v4.3 and v4.4 is that v4.4 adds
+  4 cubins (sm_75 matmul + oracle, sm_86 matmul + oracle) on top of v4.3.
+  Everything sm_61-related is bit-identical.
+- Direct re-test on the same hardware after re-installing v4.4: GTX 1070
+  hit 100% GPU utilization at 133 W with v4.4, produced accepted shares
+  with zero rejections.
+
+The original test almost certainly observed a vardiff ramp confound — the
+miner was within its first few minutes of a fresh session, at the pool's
+default starting difficulty before vardiff had adapted, so the share
+cadence looked nothing like the established v4.3 session it was compared
+against. The mistaken codegen-regression conclusion led to an
+unnecessary rollback that knowingly broke Ampere/Turing GPU mining for a
+day.
+
+### Side-effect of this revert
+The CUDA 13 + Ampere/Turing silent-CPU-fallback gap (which v0.2.4
+re-introduced as a known issue) is **fixed again** in v0.2.5 — RTX
+20-series and 30-series GPUs go back to running natively on GPU under
+CUDA 13.x drivers, no driver downgrade required.
+
+### Migration
+- Pure binary swap. `install.sh` re-run will fetch the v4.4 binary
+  (`ab70a6bc...`). No config change needed.
+- No protocol or stratum changes.
+
 ## [0.2.4] — 2026-05-27 (EMERGENCY ROLLBACK)
 
 ### Reverted

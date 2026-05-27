@@ -180,39 +180,31 @@ steady-state throughput once prep is sized correctly.
 
 ## Architecture coverage (which GPUs work)
 
-The shipped `btx-gbt-solve` binary (`v4.3-sm89-native`) embeds native
-cubins for sm_61 (Pascal), sm_89 (Ada Lovelace), sm_90 (Hopper), and
-sm_120 (Blackwell) — plus PTX for runtime JIT to other arches:
+The shipped `btx-gbt-solve` binary (`v4.4-sm75-sm86`) embeds native
+cubins for **six** architectures — every dominant consumer GPU runs
+natively on its own arch, no PTX-JIT required:
 
 | Card | Path |
 |---|---|
-| GTX 1070 / Pascal sm_61 | Native sm_61 cubin |
-| Volta / Turing / Ampere (sm_70–sm_86) | sm_61 PTX → JIT to your arch |
+| GTX 10-series / Pascal sm_61 | Native sm_61 cubin |
+| RTX 20-series / Turing sm_75 | Native sm_75 cubin |
+| RTX 30-series / Ampere consumer sm_86 | Native sm_86 cubin |
 | RTX 40-series / Ada sm_89 | Native sm_89 cubin |
 | Hopper sm_90 (H100, H200) | Native sm_90 cubin |
 | RTX 50-series / Blackwell sm_120 | Native sm_120 cubin |
 
-### ⚠️ Known issue: CUDA 13 + Ampere/Turing silent CPU fallback
+This closes the CUDA 13 + Ampere/Turing silent-CPU-fallback gap that
+older releases hit: v0.2.2 and earlier shipped only sm_61/89/90/120
+native and relied on the sm_61 PTX section to JIT-compile to sm_75 /
+sm_86 at driver load. CUDA 13 deprecated compute_61 as a JIT source,
+breaking that path for every 20- and 30-series miner on a current
+driver. v0.2.5 ships the missing arches as native cubins, no JIT
+dependency.
 
-If `nvidia-smi` reports CUDA 13.x AND your GPU is sm_70–sm_86 (Volta,
-Turing, Ampere — RTX 20-series / 30-series), the sm_61 PTX → newer-arch
-JIT path silently fails because CUDA 13 deprecated compute_61 as a JIT
-source. The solver falls back to CPU silently.
-
-**We tried to fix this with v4.4 (native sm_75 + sm_86 cubins) but the
-v4.4 build had a regression that produced incorrect matmul digests
-when running on Pascal sm_61. v4.4 has been rescinded. The fix is
-being rebuilt as v4.5.** Until v4.5 lands, CUDA 13 + Ampere/Turing
-users either need to:
-
-1. **Wait for v4.5** (under active troubleshooting)
-2. **Stay on CUDA 12.x** (the canonical NVIDIA driver/toolkit version
-   that respects sm_61 PTX) — we won't make a public driver-downgrade
-   recommendation but the option exists
-
-If `install.sh`'s smoke test fails with "binary lacks compatible
-kernel image" — **do not downgrade your driver**. Open an issue with
-your `nvidia-smi -q` output and we'll prioritize your arch in v4.5.
+**If you tried v0.2.4 on an RTX 20-series or 30-series and saw silent
+CPU fallback:** that was the temporary state after the v0.2.3 rollback
+to v4.3. Re-run `install.sh` to pull the v4.4 binary and the GPU will
+re-engage at full utilization. Never downgrade your driver.
 
 ---
 
