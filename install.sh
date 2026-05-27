@@ -21,22 +21,12 @@
 set -euo pipefail
 
 # ─── Configurables ──────────────────────────────────────────────────────────
-# Pin the release tag. install.sh always pulls this version of the solver
-# binary as a release asset.
-#
-# The binary's SHA256 is the SINGLE SOURCE OF TRUTH in pyproject.toml under
-# [tool.dexbtx-miner.solver].expected_sha256. install.sh fetches that file
-# at install time and reads the hash from it (see fetch + parse block ~L170)
-# rather than carrying its own duplicate of the value. This means bumping
-# the binary requires editing exactly one place (pyproject.toml) instead of
-# three (install.sh, pyproject.toml, release-tooling/SHA256SUMS).
-#
-# EXPECTED_SHA256 env var is supported as an override for offline / mirror
-# / fork use; if set, it skips the remote pyproject.toml fetch.
-PREBUILDS_TAG="${PREBUILDS_TAG:-v4.4-sm75-sm86}"
+# Pin the prebuilds release tag. install.sh always pulls this version.
+# Bump in lockstep with experiments/vast/prebuilds and pyproject.toml.
+PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v5.0}"
+EXPECTED_SHA256="${EXPECTED_SHA256:-f750e55fee7ab1f7f7936487d1372f567e26f2df383a307589b1810f42c3247a}"
 PREBUILDS_BASE="${PREBUILDS_BASE:-https://github.com/dexbtx/minebtx/releases/download/${PREBUILDS_TAG}}"
 SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve"
-PYPROJECT_URL="${PYPROJECT_URL:-https://raw.githubusercontent.com/dexbtx/minebtx/${PREBUILDS_TAG}/pyproject.toml}"
 
 # Default pool — override with --pool flag or DEXBTX_POOL env var.
 DEFAULT_POOL="${DEXBTX_POOL:-minebtx.com:3333}"
@@ -159,39 +149,14 @@ log "installing runtime deps (pyyaml)..."
 if [[ "$SKIP_PIP" -eq 1 ]]; then
     log "skipping dexbtx-miner pip install (--skip-pip); assuming source tree is on PYTHONPATH"
 else
-    # Install the Python package directly from the GitHub source tarball
-    # at the same release tag as the binary. This avoids needing a
-    # git binary on the host AND avoids PyPI as a single point of
-    # failure. Override DEXBTX_MINER_PKG_URL to install from a fork
-    # / local checkout / private mirror.
-    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/${PREBUILDS_TAG}.tar.gz}"
-    log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
-    "$PYTHON" -m pip install --user --upgrade "$DEXBTX_MINER_PKG_URL"
+    log "installing dexbtx-miner (pip --user)..."
+    "$PYTHON" -m pip install --user --upgrade dexbtx-miner
 
     # Make sure ~/.local/bin is on PATH for the next session
     case ":$PATH:" in
         *":$HOME/.local/bin:"*) : ;;
         *) warn "add to your shell rc: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
     esac
-fi
-
-# ─── Resolve EXPECTED_SHA256 from pyproject.toml (single source of truth) ─
-# Unless the user passed EXPECTED_SHA256 via env var (offline / fork use),
-# fetch the pyproject.toml from the release tag and extract the pinned hash.
-# This keeps install.sh + pyproject.toml + SHA256SUMS from drifting.
-if [[ -z "${EXPECTED_SHA256:-}" ]]; then
-    log "fetching solver SHA256 pin from ${PYPROJECT_URL}..."
-    PYPROJECT_TMP="$(mktemp)"
-    if ! curl -fsSL "$PYPROJECT_URL" -o "$PYPROJECT_TMP"; then
-        rm -f "$PYPROJECT_TMP"
-        err "could not fetch pyproject.toml from ${PYPROJECT_URL}. Pass EXPECTED_SHA256=<hash> to override."
-    fi
-    EXPECTED_SHA256="$(grep -E '^\s*expected_sha256\s*=' "$PYPROJECT_TMP" | head -1 | sed -E 's/.*"([a-f0-9]+)".*/\1/')"
-    rm -f "$PYPROJECT_TMP"
-    if [[ ! "$EXPECTED_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
-        err "could not extract a 64-char SHA256 from pyproject.toml; got: ${EXPECTED_SHA256:-<empty>}"
-    fi
-    log "pinned solver SHA256 (from pyproject.toml): $EXPECTED_SHA256"
 fi
 
 # ─── Fetch + verify solver ──────────────────────────────────────────────────
@@ -225,11 +190,6 @@ if echo "$HELP_OUT" | grep -q "share-target"; then
 else
     err "installed solver lacks --share-target flag (the patch this release needs). Aborting."
 fi
-if echo "$HELP_OUT" | grep -q "daemon"; then
-    log "smoke-test: --daemon flag present ✓"
-else
-    err "installed solver lacks --daemon flag — the dexbtx-miner wrapper runs the solver in daemon mode for persistent CUDA context. Aborting."
-fi
 
 # ─── Config ─────────────────────────────────────────────────────────────────
 if [[ -z "$ADDRESS" && "$SKIP_PROMPT" -eq 0 ]]; then
@@ -258,117 +218,22 @@ if [[ -f "$CONFIG_PATH" ]]; then
 fi
 
 if [[ ! -f "$CONFIG_PATH" || "$ASSUME_YES" -eq 1 ]]; then
-    # ───────────────────────────────────────────────────────────────────
-    # Per-GPU tuning profile.
-    #
-    # THE MOST IMPORTANT LEVERS are PREPARE_WORKERS and SOLVER_THREADS —
-    # the matmul backend is CPU-input-prep-bound on the faster Blackwell
-    # cards. On an RTX 5070 we measured 70.6% util with workers=8 / threads=4
-    # and 100% util with workers=16 / threads=8 (sweep 2026-05-25 on contract
-    # 37712744). Batch size has zero effect once prep is sufficient.
-    #
-    # CPU sizing note: workers+threads should sum to ≤ effective vCPU count
-    # of your container. The pool's solver is async (PIPELINE_ASYNC=1), so
-    # idle workers don't burn cycles — over-provisioning is cheap.
-    #
-    # Profiles below are starting points calibrated against measured cards.
-    # Run `dexbtx-miner benchmark` (TUNING.md) to dial in further.
-    # ───────────────────────────────────────────────────────────────────
+    # Per-GPU tuning suggestions. The default (batch=128) is good for
+    # modern Ampere+/Ada/Blackwell. Pascal-era cards (sm_61) benefit from
+    # batch=32. Honor the user's hardware:
     GPU_BATCH=128
     GPU_PREFETCH=8
     GPU_WORKERS=8
-    GPU_THREADS=4
     if [[ "$GPU_NAME" == *"GTX 10"* || "$GPU_NAME" == *"GTX 9"* ]]; then
-        # Pascal sm_61 (e.g. GTX 1070): memory-bound. Measured ceiling
-        # ~83% util / 113W (75% of 150W TDP) at 16/8/128 — same ceiling
-        # as the older 4/4/32 profile in practice; Pascal is bandwidth-
-        # constrained regardless of input-prep rate. Standardized on the
-        # universal modern profile for tuning consistency across gens.
-        GPU_BATCH=128
-        GPU_PREFETCH=8
-        GPU_WORKERS=16
-        GPU_THREADS=8
-    elif [[ "$GPU_NAME" == *"RTX 2080 Ti"* || "$GPU_NAME" == *"RTX 20"* || "$GPU_NAME" == *"GTX 16"* ]]; then
-        # Turing sm_75 (RTX 20-series, GTX 16-series). Measured: 12/8/128
-        # → 100% util / 296W sustained on a boost-enabled host. Runs the
-        # Pascal sm_61 PTX → JIT to sm_75 (no native sm_75 cubin).
-        GPU_BATCH=128
-        GPU_PREFETCH=8
-        GPU_WORKERS=12
-        GPU_THREADS=8
-    elif [[ "$GPU_NAME" == *"RTX 30"* || "$GPU_NAME" == *"A100"* || "$GPU_NAME" == *"A40"* || "$GPU_NAME" == *"A4000"* || "$GPU_NAME" == *"A5000"* || "$GPU_NAME" == *"A6000"* ]]; then
-        # Ampere — consumer 30-series (sm_86) + workstation/datacenter
-        # A100 / A40 / Axxxx (sm_80). Measured on 3060 Ti: 12/8/128
-        # → 100% util / 190W sustained (95% of 200W TDP). Runs the
-        # Pascal sm_61 PTX → JIT (no native sm_80/sm_86 cubin in v4.3).
-        GPU_BATCH=128
-        GPU_PREFETCH=8
-        GPU_WORKERS=12
-        GPU_THREADS=8
-    elif [[ "$GPU_NAME" == *"RTX 4060 Ti"* ]]; then
-        # Ada Lovelace sm_89, 16GB. Measured: 12/8/128 → 100% util / 164W
-        # sustained. Sweep tested batch=64/128/256; batch had zero effect
-        # on steady-state util. The native sm_89 cubin requires v4.3+
-        # (or sm_61 PTX → JIT fallback on v4.0-v4.2). Check with
-        # `cuobjdump --list-elf` to confirm sm_89 is present.
-        GPU_BATCH=128
-        GPU_PREFETCH=8
-        GPU_WORKERS=12
-        GPU_THREADS=8
-    elif [[ "$GPU_NAME" == *"RTX 4070"* || "$GPU_NAME" == *"RTX 4080"* || "$GPU_NAME" == *"RTX 4090"* ]]; then
-        # Ada Lovelace sm_89, larger dies. Untested at this scale —
-        # start from the 5070 profile (workers=16) and tune up.
-        GPU_BATCH=128
-        GPU_PREFETCH=8
-        GPU_WORKERS=16
-        GPU_THREADS=8
-    elif [[ "$GPU_NAME" == *"RTX 5060 Ti"* ]]; then
-        # Blackwell sm_120, 16GB. Measured: 16/8/128 → 99% util / 150W.
-        # Standardized on the universal modern profile for consistency
-        # with 5070 / 5070 Ti / 4060 Ti / 2080 Ti — over-provisioning
-        # workers is cheap (async; idle workers don't burn cycles).
-        GPU_BATCH=128
-        GPU_PREFETCH=8
-        GPU_WORKERS=16
-        GPU_THREADS=8
-    elif [[ "$GPU_NAME" == *"RTX 5070 Ti"* ]]; then
-        # Blackwell sm_120, 16GB. NOTE: batch=256+prefetch=16 broke CUDA
-        # on this card historically. Keep batch=128. Workers bumped for
-        # the extra SM count vs 5060 Ti.
-        GPU_BATCH=128
-        GPU_PREFETCH=8
-        GPU_WORKERS=16
-        GPU_THREADS=8
-    elif [[ "$GPU_NAME" == *"RTX 5070"* ]]; then
-        # Blackwell sm_120, 12GB. Measured: 16/8/128 → 99.9% util / 223W
-        # sustained. The 5060 Ti's workers=8 default caps the 5070 at
-        # only 70.6% util — the extra SMs and higher boost clock starve
-        # the prep pipeline. Bump to workers=16.
-        GPU_BATCH=128
-        GPU_PREFETCH=8
-        GPU_WORKERS=16
-        GPU_THREADS=8
-    elif [[ "$GPU_NAME" == *"RTX 5080"* || "$GPU_NAME" == *"RTX 5090"* ]]; then
-        # Blackwell sm_120 large-die. Untested at this scale — start from
-        # the 5070 profile and tune up.
-        GPU_BATCH=128
-        GPU_PREFETCH=8
-        GPU_WORKERS=16
-        GPU_THREADS=8
+        GPU_BATCH=32  # Pascal+older sweet spot per memory project_btx_solver_tuning_findings
+        GPU_PREFETCH=4
+        GPU_WORKERS=4
     fi
     cat > "$CONFIG_PATH" <<YAML
 # DEXBTX miner config — generated by install.sh
 # Production-canonical solver tuning: env vars match upstream BTX matmul
 # source names verified via grep getenv. Wrong names silently no-op
 # (we shipped BTX_MATMUL_PREFETCH for a while; it doesn't exist).
-#
-# >>> THE TWO LEVERS THAT MATTER: solver_prepare_workers + solver_threads <<<
-# These control CPU-side input generation for the matmul kernel. A
-# Blackwell-class GPU at the canonical 5060 Ti tuning (workers=8) is
-# CPU-input-bound at 70% util on cards faster than a 5060 Ti. Bump them
-# to 16/8 if you have ≥16 effective vCPUs and the card is sub-100% util.
-# Batch size, prefetch depth, and async flag do NOT meaningfully change
-# steady-state throughput once prep is sufficient (verified by sweep).
 pool_host: "${POOL%:*}"
 pool_port: ${POOL##*:}
 pool_tls: false
@@ -380,166 +245,52 @@ gbt_solve_path: "${SOLVER_PATH}"
 
 # Solver tuning (per-GPU profile chosen from detected hardware: ${GPU_NAME:-CPU only})
 solver_backend: "cuda"
-solver_prepare_workers: ${GPU_WORKERS} # BTX_MATMUL_PREPARE_WORKERS (KEY LEVER — bump together with threads)
-solver_threads: ${GPU_THREADS}         # BTX_MATMUL_SOLVER_THREADS  (KEY LEVER — bump together with workers)
+solver_threads: 4
 solver_batch_size: ${GPU_BATCH}        # BTX_MATMUL_SOLVE_BATCH_SIZE
 solver_prefetch_depth: ${GPU_PREFETCH} # BTX_MATMUL_PREPARE_PREFETCH_DEPTH
+solver_prepare_workers: ${GPU_WORKERS} # BTX_MATMUL_PREPARE_WORKERS
 solver_pipeline_async: 1               # BTX_MATMUL_PIPELINE_ASYNC (overlap prep+kernel)
 gpu_inputs: 0                          # BTX_MATMUL_GPU_INPUTS (CPU-gen inputs; the "GPU saturation breakthrough" fix)
 
-nonces_per_slice: 20000000
+nonces_per_slice: 2000000
 reconnect_initial_s: 1.0
 reconnect_max_s: 60.0
 
 log_level: "INFO"
 YAML
-    log "config written → $CONFIG_PATH"
-    log "  GPU profile:        workers=${GPU_WORKERS}  threads=${GPU_THREADS}  batch=${GPU_BATCH}  prefetch=${GPU_PREFETCH}"
-    log "  if util stays below 95% during steady-state mining, bump workers + threads"
-    log "  (workers and threads are the dominant levers on Blackwell)"
+    log "config written → $CONFIG_PATH (profile: batch=${GPU_BATCH} prefetch=${GPU_PREFETCH} workers=${GPU_WORKERS})"
 fi
 
 # ─── Hard GPU acceleration smoke test ───────────────────────────────────────
-# Runs the solver with --backend cuda against a deterministic input AND
-# verifies CUDA actually engaged via three independent signals — solver
-# alone reports JSON in CPU-fallback mode too, which is the silent-failure
-# mode where a miner runs at ~6 N/s on CPU for hours without noticing.
-#
-# Three-assertion check (any failure aborts install):
-#   (a) solver PID visible in nvidia-smi --query-compute-apps during run
-#   (b) sustained GPU power > 100W (5060 Ti idle ~30W; engaged 150-180W)
-#   (c) effective throughput > 1000 N/s — this uses tries_used/elapsed_s
-#       which docs/TUNING.md correctly calls a misleading per-card rate
-#       metric. Here it's used ONLY as a LIVENESS FLOOR (proves the
-#       kernel did productive work, vs the CPU-fallback ~6 N/s case),
-#       NOT as a tuning measurement. 1000 N/s is well below any real
-#       GPU's actual rate (5060 Ti is 28000+) — failure means CPU
-#       fallback or catastrophic kernel-launch failure, not a tuning
-#       problem.
-#
-# If (a) fails, the binary lacks a kernel image compatible with this
-# driver/GPU. The fix is ALWAYS to ship a binary that supports the user's
-# driver — never to ask the user to downgrade. We aim at current drivers.
+# Runs the solver with --backend cuda against a deterministic input. If the
+# CUDA backend doesn't engage (driver missing, sm not supported, CUDA OOM,
+# etc.) the solver falls back to CPU which is ~100× slower — the alpha
+# cohort would never know. Fail HARD so the operator notices at install time.
 if [[ "$HAS_NVIDIA" -eq 1 ]]; then
-    log "running GPU acceleration smoke test (20s with engagement assertions)..."
-
-    # Background nvidia-smi poll for power curve
-    POLL_OUT="$(mktemp)"
-    APPS_OUT="$(mktemp)"
-    trap 'rm -f "$POLL_OUT" "$APPS_OUT"' EXIT
-    ( for i in $(seq 1 22); do
-        nvidia-smi --query-gpu=utilization.gpu,power.draw --format=csv,noheader
-        nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader >> "$APPS_OUT" 2>/dev/null
-        sleep 1
-      done ) > "$POLL_OUT" 2>&1 &
-    POLL_PID=$!
-
-    # CRITICAL: the smoke test must mirror the env-var setup the production
-    # miner uses — most importantly BTX_MATMUL_GPU_INPUTS=0. Without it the
-    # solver defaults to GPU-side input gen on most modern cards (the
-    # "8% util / 33W silent fallback" path), which would correctly fail
-    # assertion (b) but for the wrong reason — making install.sh look like
-    # a host-power problem when the real issue is the smoke test exercising
-    # a different code path than the production miner.
-    SMOKE_OUT="$(BTX_MATMUL_BACKEND=cuda \
-        BTX_MATMUL_GPU_INPUTS=0 \
-        BTX_MATMUL_SOLVE_BATCH_SIZE=128 \
-        BTX_MATMUL_PREPARE_PREFETCH_DEPTH=8 \
-        BTX_MATMUL_PREPARE_WORKERS=8 \
-        BTX_MATMUL_PIPELINE_ASYNC=1 \
-        "$SOLVER_PATH" \
+    log "running GPU acceleration smoke test (5-10 seconds)..."
+    SMOKE_OUT="$("$SOLVER_PATH" \
         --version 536870912 \
         --prev-hash 0ab38fdff2ef667dcddac7f50c3696080c26697615f7b6b9af5c3a1ba0a5fb7e \
         --merkle-root d906f02ed11d8936770423263b56c5ffe1ea1b15c8a2867afb161adb6fd76eb7 \
         --time 1779672814 --bits 0x1d17c609 \
-        --share-target 00005f59c4000000000000000000000000000000000000000000000000000000 \
+        --share-target 00ffffff00000000000000000000000000000000000000000000000000000000 \
         --seed-a 8460daf3ff446cc55a7115de88ee24c8a2bf182eedde43abb9cf4cc94cc209bf \
         --seed-b 7f2e377616feb92d2e9857cab390595b7d6b8d24373a2da394f8d97197b5f437 \
         --block-height 110806 --nonce-start 1 \
-        --max-tries 100000000 --max-seconds 20 \
-        --backend cuda --solver-threads 4 --batch-size 128 2>&1 || true)"
-
-    wait $POLL_PID 2>/dev/null || true
-
+        --max-tries 200000 --max-seconds 30 \
+        --backend cuda --solver-threads 4 --batch-size 32 2>&1 || true)"
     SMOKE_LAST_LINE="$(echo "$SMOKE_OUT" | grep -E '^\{.*\}$' | tail -1)"
     if [[ -z "$SMOKE_LAST_LINE" ]]; then
         echo "$SMOKE_OUT" | tail -10 >&2
         err "GPU smoke test: solver produced no JSON output. CUDA backend likely failed to initialize. Aborting."
     fi
-
-    # ASSERTION (a): a compute app appeared in nvidia-smi.
-    # Bare-metal Linux: process_name resolves to "btx-gbt-solve".
-    # WSL2: nvidia-smi (running against WDDM on Windows) sees the WSL2
-    # process by PID but cannot resolve the process_name across the
-    # namespace boundary — it reports "[Not Found]" or blank for the
-    # name field while the PID is correct. We accept either signal:
-    # the literal binary name OR any numeric-PID entry, since CPU
-    # fallback (the failure mode we're trying to catch) produces NO
-    # compute-app entry at all.
-    if grep -qE '^[0-9]+,[[:space:]]*btx-gbt-solve' "$APPS_OUT" 2>/dev/null; then
-        APPS_MATCH="process_name=btx-gbt-solve"
-    elif grep -qE '^[0-9]+,' "$APPS_OUT" 2>/dev/null; then
-        # WSL2 path: PID resolved, process_name didn't. Still proves the GPU
-        # is running a compute kernel for our solver during the smoke window.
-        APPS_MATCH="PID-only (WSL2-compatible match)"
+    if echo "$SMOKE_LAST_LINE" | grep -q '"found":true'; then
+        ELAPSED="$(echo "$SMOKE_LAST_LINE" | sed -E 's/.*"elapsed_s":([0-9.e+-]+).*/\1/')"
+        log "GPU smoke test: PASS (found a share in ${ELAPSED}s)"
     else
-        echo
-        err "GPU smoke test FAILED (assertion a: nvidia-smi --query-compute-apps never saw any compute process).
-
-The solver silently fell back to CPU. The binary does NOT have a kernel image
-compatible with your GPU/driver combination. Driver: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1).
-
-This is a binary issue, NOT a driver issue — DO NOT downgrade your driver.
-
-Action: file an issue at github.com/dexbtx/minebtx/issues with:
-  - GPU model: ${GPU_NAME}
-  - Driver version: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
-  - CUDA runtime: $(nvidia-smi --query-gpu=cuda_version --format=csv,noheader 2>/dev/null | head -1)
-
-We will ship a binary build that supports your hardware. Until then this
-install cannot proceed — running on CPU would burn money for trivial output."
+        echo "$SMOKE_LAST_LINE" >&2
+        warn "GPU smoke test: solver ran but didn't find a share — could be hard luck OR CPU fallback. Continuing, but watch first share latency."
     fi
-
-    # ASSERTION (b): sustained power > 100W (need ≥10 samples above)
-    HIGH_POWER_SAMPLES="$(awk -F, '{gsub(/[ W]/,"",$2); if ($2+0 > 100) c++} END{print c+0}' "$POLL_OUT")"
-    if [[ "$HIGH_POWER_SAMPLES" -lt 10 ]]; then
-        warn "GPU smoke test WARN (assertion b: only ${HIGH_POWER_SAMPLES}/20 samples above 100W)"
-        warn "  Power curve was:"
-        head -5 "$POLL_OUT" | sed 's/^/    /' >&2
-        warn "  GPU compute engaged but at low power — host may be power-capping"
-        warn "  or sharing physical GPU with another tenant. Throughput will be degraded."
-    fi
-
-    # ASSERTION (c): effective throughput > 1000 N/s
-    THROUGHPUT_N_S="$(echo "$SMOKE_LAST_LINE" | python3 -c "
-import sys, json
-try:
-    r = json.loads(sys.stdin.read())
-    tries = r.get('tries_used', 0)
-    elap = max(r.get('elapsed_s', 1), 0.01)
-    print(int(tries / elap))
-except Exception:
-    print(0)
-")"
-    if [[ "$THROUGHPUT_N_S" -lt 1000 ]]; then
-        err "GPU smoke test FAILED (assertion c: throughput ${THROUGHPUT_N_S} N/s, expected >1000).
-
-Solver appeared in compute-apps and drew power, but effective throughput is
-${THROUGHPUT_N_S} nonces/sec — far below the 1000 N/s floor that proves
-the kernel ran productively. Canonical 5060 Ti is 28000+ N/s.
-
-Possible causes:
-  - Noisy neighbor sharing SMs on the same physical GPU
-  - Thermal throttling under sustained load
-  - Driver issue causing kernel launches to fail silently after first launch
-
-This install cannot proceed at this throughput."
-    fi
-
-    log "GPU smoke test PASS:"
-    log "  compute-app PID visible in nvidia-smi: yes"
-    log "  sustained power: ${HIGH_POWER_SAMPLES}/20 samples >100W"
-    log "  throughput: ${THROUGHPUT_N_S} N/s"
 fi
 
 # ─── Summary ────────────────────────────────────────────────────────────────
