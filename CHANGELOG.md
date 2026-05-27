@@ -4,6 +4,68 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-05-27 (MAJOR: solver v5.0 + stratum protocol v5)
+
+This is the umbrella v5.0 release for the DEXBTX pool. Mandatory upgrade
+— pre-v5 miners are rejected by the pool at the capability gate.
+
+### Why
+A consensus-level bug in the solver (Bug A) caused the early-exit
+`pre_hash` filter to operate at share-tier difficulty instead of the
+block-tier required by `btxd`'s `matmul phase2` PoW check. Every
+candidate the pool submitted for ~24h was rejected ("matmul phase2
+proof of work failed"), and the pool DB accrued ~234 BTX of phantom
+credits via a now-removed recovery path on the maturation side. v5.0
+ships the solver fix + a capability-based protocol gate so the pool
+stops accepting work from pre-fix clients.
+
+### Solver
+- **btx-gbt-solve bumped from v4.4 to v5.0.0** (tag `btx-prebuilds-v5.0`,
+  SHA256 `f750e55fee7ab1f7f7936487d1372f567e26f2df383a307589b1810f42c3247a`).
+- Patch: `SolveMatMul` preserves the block-derived `bnTarget` in a
+  separate variable BEFORE the `share_target_override` clobbers it,
+  and passes that to both `BuildMatMulNonceBatchWindow` call sites as
+  the pre_hash source. Result: the solver's pre_hash early-exit filter
+  uses block-tier semantics matching `btxd`'s consensus check.
+- Cubin coverage unchanged: sm_61 / sm_75 / sm_86 / sm_89 / sm_90 / sm_120.
+- Validated: 25/25 mainnet block replay (heights 93k–113.3k, two
+  independent populations) + regtest end-to-end (n=512, tight target,
+  pre_hash on at h=0): one block mined + accepted + treasury paid.
+
+### Stratum protocol (v5)
+- **`mining.subscribe` extension**: a trailing dict now carries
+  `protocol_compliant: ["pre_hash_block_tier_v18"]`, `hardware`
+  (CPU/RAM/OS/GPUs), and `session_id`. Pre-v5 miners that don't send
+  the dict (or omit `pre_hash_block_tier_v18`) get stratum error 401
+  with an upgrade message; connection closed.
+- **New `worker.report_metrics`**: sent every 60s with runtime
+  telemetry (CPU util, RAM, per-GPU util/power/temp, solver nps,
+  shares-session-total).
+- **New `mining.set_canonical_name` server→client notification**:
+  pool assigns a stable display name per physical GPU (format
+  `{MODEL_NORMALIZED}-{NATO_PHONETIC}-{SEQUENCE}`, e.g. `5090-ALPHA-1`)
+  keyed by `gpu_uuid`. Miner logs the assignment prominently and
+  caches it in `~/.dexbtx-miner/canonical_names.json` so reconnects
+  retain the info.
+
+### Capability declaration (forward-compatible)
+The gate checks for the capability *string*, not the client *identity*.
+Third-party solvers (e.g. easybtx's Mac client) that ship an equivalent
+fix can declare `pre_hash_block_tier_v18` and connect normally. The
+pool also bans capability-liars: 3 `is_block` shares failing the
+block-tier pre_hash check within 1h → 1h ban.
+
+### New modules
+- `dexbtx_miner.hardware` — CPU/RAM/OS/GPU enumeration via
+  `/proc/cpuinfo`, `/proc/meminfo`, and `nvidia-smi`.
+- `dexbtx_miner.canonical_names` — local cache of pool-assigned names.
+
+### Install
+`install.sh` now points at
+`github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v5.0/btx-gbt-solve`
+(the old `github.com/btx-pool/btx-prebuilds` URL was a phantom — that
+org never existed).
+
 ## [0.2.6] — 2026-05-27
 
 ### Fixed

@@ -21,8 +21,10 @@ import json
 import logging
 import random
 import time
+import uuid as _uuid
 from typing import Any
 
+from . import canonical_names, hardware
 from .config import MinerConfig, fully_qualified_worker
 from .gbt_solve_wrapper import (
     GbtSolveWrapper,
@@ -30,6 +32,10 @@ from .gbt_solve_wrapper import (
     SolveResult,
     SolverEnv,
 )
+
+# Period for `worker.report_metrics` heartbeats. 60s matches the spec in
+# RELEASE-v5.0.md §2c; tune via env if needed.
+METRICS_REPORT_INTERVAL_SEC = 60.0
 
 log = logging.getLogger(__name__)
 
@@ -138,6 +144,11 @@ class StratumClient:
         self._extranonce2_size = 4
         self._difficulty = 1.0
         self._solver_task: asyncio.Task | None = None
+        self._metrics_task: asyncio.Task | None = None
+        # v5.0: session_id is a local UUID echoed in periodic metrics so the
+        # pool can correlate `worker.report_metrics` to a single connection
+        # even if a worker reconnects mid-window.
+        self._session_id: str = ""
         # Stats
         self.shares_accepted = 0
         self.shares_rejected = 0
@@ -173,6 +184,7 @@ class StratumClient:
             reader_task = asyncio.create_task(self._reader_loop())
             await self._handshake()
             self._solver_task = asyncio.create_task(self._solver_loop())
+            self._metrics_task = asyncio.create_task(self._metrics_loop())
             # Reader runs until disconnect; await it for the session lifetime.
             await reader_task
         finally:
@@ -189,6 +201,13 @@ class StratumClient:
                 except (asyncio.CancelledError, Exception):
                     pass
                 self._solver_task = None
+            if self._metrics_task is not None:
+                self._metrics_task.cancel()
+                try:
+                    await self._metrics_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._metrics_task = None
             if self._writer is not None:
                 try:
                     self._writer.close()
@@ -201,19 +220,33 @@ class StratumClient:
             self._pending.clear()
 
     async def _handshake(self) -> None:
-        # mining.subscribe — reports our package version so the pool's
-        # `stratum_sessions.agent_string` column shows e.g. "dexbtx-miner/0.2.1".
-        # Lets ops query which clients have which fixes deployed.
-        from . import USER_AGENT
-        sub = await self._call("mining.subscribe", [USER_AGENT])
+        # mining.subscribe — v5.0 carries TWO new params in the trailing
+        # dict: `protocol_compliant` (capability array) and `hardware`
+        # (one-shot static fingerprint). Older pools that don't understand
+        # the extra params still see params[0] (user agent) and ignore
+        # the rest. v5.0+ pools reject if `pre_hash_block_tier_v18` is
+        # missing from `protocol_compliant`.
+        from . import PROTOCOL_CAPABILITIES, USER_AGENT, __version__
+        self._session_id = _uuid.uuid4().hex
+        hw = hardware.collect_static_hardware(
+            miner_version=__version__,
+            cpu_threads_allocated=self.cfg.solver_threads,
+        )
+        log.info("hardware: %s", hardware.hardware_summary_string(hw))
+        extension = {
+            "protocol_compliant": list(PROTOCOL_CAPABILITIES),
+            "hardware": hw,
+            "session_id": self._session_id,
+        }
+        sub = await self._call("mining.subscribe", [USER_AGENT, extension])
         # Per stratum: [[[notify, sid]], extranonce1, extranonce2_size]
         try:
             self._extranonce1 = sub[1]
             self._extranonce2_size = int(sub[2])
         except (IndexError, TypeError, ValueError) as e:
             raise RuntimeError(f"bad subscribe response: {sub!r}") from e
-        log.info("subscribed; extranonce1=%s en2_size=%d",
-                 self._extranonce1, self._extranonce2_size)
+        log.info("subscribed; extranonce1=%s en2_size=%d session=%s",
+                 self._extranonce1, self._extranonce2_size, self._session_id[:8])
 
         # mining.authorize
         worker = fully_qualified_worker(self.cfg)
@@ -259,6 +292,8 @@ class StratumClient:
             self._on_set_difficulty(params)
         elif method == "mining.set_extranonce":
             self._on_set_extranonce(params)
+        elif method == "mining.set_canonical_name":
+            self._on_set_canonical_name(params)
         else:
             log.debug("ignoring server message method=%s", method)
 
@@ -291,6 +326,43 @@ class StratumClient:
             return
         log.info("extranonce updated en1=%s en2_size=%d",
                  self._extranonce1, self._extranonce2_size)
+
+    def _on_set_canonical_name(self, params: list[Any]) -> None:
+        """Handle pool→miner canonical name assignment (one per GPU).
+
+        The pool sends one `mining.set_canonical_name` notification per
+        GPU after the first hardware report. We accept either a single
+        params object or a list (some implementations may batch).
+        """
+        items: list[dict[str, Any]] = []
+        if isinstance(params, dict):
+            items = [params]
+        elif isinstance(params, list):
+            for p in params:
+                if isinstance(p, dict):
+                    items.append(p)
+        if not items:
+            log.warning("set_canonical_name: empty/malformed params %r", params)
+            return
+        for item in items:
+            uuid_str = item.get("gpu_uuid")
+            name = item.get("canonical_name")
+            if not (uuid_str and name):
+                log.warning("set_canonical_name: missing required field; got %r", item)
+                continue
+            canonical_names.upsert(
+                gpu_uuid=uuid_str,
+                canonical_name=name,
+                operator_label=item.get("operator_label"),
+                assigned_at=int(item.get("assigned_at", time.time())),
+            )
+        banner = canonical_names.format_assignment_banner(items)
+        if banner:
+            # Print to stdout for unmissable operator visibility, and also
+            # log at INFO so rotating log files capture it.
+            print(banner, flush=True)
+            for line in banner.splitlines():
+                log.info("%s", line)
 
     # ── Solver loop ────────────────────────────────────────────────────
 
@@ -375,6 +447,39 @@ class StratumClient:
             log.info("share REJECTED job=%s nonce=%d (a/r=%d/%d)",
                      job.job_id, share.nonce, self.shares_accepted,
                      self.shares_rejected)
+
+    # ── Periodic metrics ───────────────────────────────────────────────
+
+    async def _metrics_loop(self) -> None:
+        """Send `worker.report_metrics` every ~60s for the session lifetime.
+
+        Failures are logged but don't tear down the session — periodic
+        telemetry is best-effort. The pool's `worker.report_metrics`
+        handler returns a simple ack; if it doesn't recognize the method
+        (older pool), the call errors and we just continue.
+        """
+        # Initial offset: stagger across miners so the pool doesn't get
+        # synchronized spikes from a large fleet upgrading at the same time.
+        await asyncio.sleep(random.uniform(5.0, METRICS_REPORT_INTERVAL_SEC))
+        while True:
+            try:
+                solver_nps = getattr(self.solver, "last_observed_nps", None)
+                payload = hardware.collect_runtime_metrics(
+                    session_id=self._session_id,
+                    solver_nps=solver_nps,
+                    shares_session_total=self.shares_accepted + self.shares_rejected,
+                )
+                # Notify-style call: don't await a result (some pools reply,
+                # some don't; we don't care for periodic telemetry).
+                await self._send({
+                    "method": "worker.report_metrics",
+                    "params": [payload],
+                })
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.debug("metrics report failed (non-fatal): %s", e)
+            await asyncio.sleep(METRICS_REPORT_INTERVAL_SEC)
 
     # ── RPC helpers ────────────────────────────────────────────────────
 
