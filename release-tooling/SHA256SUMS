@@ -1,5 +1,5 @@
-# btx-gbt-solve v4.3 — native sm_61 + sm_89 + sm_90 + sm_120 cubins
-921c89fba785863f460ab8b23c193e4b8af729569124f45e09b5c29a26a8b120 *btx-gbt-solve
+# btx-gbt-solve v4.4 — native sm_61 + sm_75 + sm_86 + sm_89 + sm_90 + sm_120 cubins
+ab70a6bc6a3756c5adbc85d7eba90bca370b39b4b6acb8610b45cca994771b98 *btx-gbt-solve
 # btxd + btx-cli for users running their own node alongside the miner
 03ee2a0e9832839d871e7c4364724b31f03bc71614b3c561ac19993f6c5ffa77 *btxd
 bd305e132d277c0e63db9fb4218b2f9a05323b835979fd207811c94688ac46d0 *btx-cli
