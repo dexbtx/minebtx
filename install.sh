@@ -467,10 +467,24 @@ if [[ "$HAS_NVIDIA" -eq 1 ]]; then
         err "GPU smoke test: solver produced no JSON output. CUDA backend likely failed to initialize. Aborting."
     fi
 
-    # ASSERTION (a): solver appeared in compute-apps
-    if ! grep -q btx-gbt-solve "$APPS_OUT" 2>/dev/null; then
+    # ASSERTION (a): a compute app appeared in nvidia-smi.
+    # Bare-metal Linux: process_name resolves to "btx-gbt-solve".
+    # WSL2: nvidia-smi (running against WDDM on Windows) sees the WSL2
+    # process by PID but cannot resolve the process_name across the
+    # namespace boundary — it reports "[Not Found]" or blank for the
+    # name field while the PID is correct. We accept either signal:
+    # the literal binary name OR any numeric-PID entry, since CPU
+    # fallback (the failure mode we're trying to catch) produces NO
+    # compute-app entry at all.
+    if grep -qE '^[0-9]+,[[:space:]]*btx-gbt-solve' "$APPS_OUT" 2>/dev/null; then
+        APPS_MATCH="process_name=btx-gbt-solve"
+    elif grep -qE '^[0-9]+,' "$APPS_OUT" 2>/dev/null; then
+        # WSL2 path: PID resolved, process_name didn't. Still proves the GPU
+        # is running a compute kernel for our solver during the smoke window.
+        APPS_MATCH="PID-only (WSL2-compatible match)"
+    else
         echo
-        err "GPU smoke test FAILED (assertion a: nvidia-smi --query-compute-apps never saw btx-gbt-solve).
+        err "GPU smoke test FAILED (assertion a: nvidia-smi --query-compute-apps never saw any compute process).
 
 The solver silently fell back to CPU. The binary does NOT have a kernel image
 compatible with your GPU/driver combination. Driver: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1).

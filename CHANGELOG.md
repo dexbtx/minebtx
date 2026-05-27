@@ -4,6 +4,32 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.6] — 2026-05-27
+
+### Fixed
+- **Python 3.14 argparse failure**: literal `%` in the `--prepare-workers`
+  help string ("sub-95%.") was unescaped. Python 3.14 tightened argparse's
+  `%`-substitution handling, causing the miner to fail to start on 3.14
+  with a string-formatting error. Earlier Pythons silently tolerated it.
+  Now escaped as `%%`. Reported by a tester running v0.2.5 on Python 3.14.
+- **install.sh smoke test false-negative on WSL2**: `install.sh` runs a
+  CUDA engagement smoke test that asserts the solver appears in
+  `nvidia-smi --query-compute-apps`. Under WSL2, nvidia-smi runs against
+  the WDDM driver on the Windows host and can resolve the PID but
+  cannot resolve the process name across the WSL2 namespace boundary —
+  it returns `<PID>, [Not Found]`. The old assertion grep'd for the
+  literal string `btx-gbt-solve` and failed on WSL2 even when the GPU
+  was fully engaged at 100% util. Assertion (a) now also accepts any
+  numeric-PID entry as evidence the GPU is running a compute kernel
+  during the smoke window. The other two assertions (sustained power
+  >100W, throughput floor >1000 N/s) continue to catch true CPU
+  fallback. Reported by a tester running v0.2.5 on RTX 3060 Ti / WSL2.
+
+### Confirmed in the wild
+- First independent confirmation of v4.4 binary on RTX 30-series in
+  the wild: 3060 Ti under WSL2 reported 100% GPU util at 217 W during
+  steady-state mining. Retroactively validates the v0.2.5 republish.
+
 ## [0.2.5] — 2026-05-27 (REVERTS 0.2.4 — RESTORES v4.4 BINARY)
 
 ### Reverted

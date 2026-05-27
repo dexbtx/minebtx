@@ -93,7 +93,7 @@ def _make_argparser() -> argparse.ArgumentParser:
                     help="BTX_MATMUL_SOLVER_THREADS — KEY LEVER (with --prepare-workers); canonical 8")
     ap.add_argument("--prepare-workers", type=int,
                     help="BTX_MATMUL_PREPARE_WORKERS — KEY LEVER (with --threads); canonical 16. "
-                         "Bump both together if GPU util is sub-95%.")
+                         "Bump both together if GPU util is sub-95%%.")
     ap.add_argument("--batch-size", type=int,
                     help="BTX_MATMUL_SOLVE_BATCH_SIZE; canonical 128 (avoid 256 on 5070 Ti)")
     ap.add_argument("--prefetch", type=int,
