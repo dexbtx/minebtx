@@ -149,8 +149,14 @@ log "installing runtime deps (pyyaml)..."
 if [[ "$SKIP_PIP" -eq 1 ]]; then
     log "skipping dexbtx-miner pip install (--skip-pip); assuming source tree is on PYTHONPATH"
 else
-    log "installing dexbtx-miner (pip --user)..."
-    "$PYTHON" -m pip install --user --upgrade dexbtx-miner
+    # Install the Python package directly from the GitHub source tarball
+    # for the v0.3 release tag. We do NOT publish to PyPI — fetching from
+    # GitHub keeps the install pinned to a specific release commit and
+    # avoids a third-party package surface. Override DEXBTX_MINER_PKG_URL
+    # to install from a fork or a different ref.
+    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.3.1.tar.gz}"
+    log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
+    "$PYTHON" -m pip install --user --upgrade "$DEXBTX_MINER_PKG_URL"
 
     # Make sure ~/.local/bin is on PATH for the next session
     case ":$PATH:" in

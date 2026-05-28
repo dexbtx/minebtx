@@ -4,6 +4,18 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-05-28 (install.sh hotfix — non-mandatory for existing miners)
+
+### Fixed
+- **install.sh: `pip install dexbtx-miner` was looking up PyPI** (where this
+  package is not published) and failing with `ERROR: No matching distribution
+  found for dexbtx-miner` for any new miner running `install.sh` from scratch.
+  Restored the v0.2.x GitHub-tarball install pattern, now pinned to the
+  v0.3.1 release tag. Override via `DEXBTX_MINER_PKG_URL` for forks.
+  Reported by a 5090 operator on first-install retry. Existing v0.3.0
+  installations are unaffected (the Python package source is byte-identical
+  between v0.3.0 and v0.3.1 — only `install.sh` changed).
+
 ## [0.3.0] — 2026-05-27 (MAJOR: solver v5.0 + stratum protocol v5)
 
 This is the umbrella v5.0 release for the DEXBTX pool. Mandatory upgrade
