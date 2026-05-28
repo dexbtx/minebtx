@@ -228,9 +228,22 @@ class StratumClient:
         # missing from `protocol_compliant`.
         from . import PROTOCOL_CAPABILITIES, USER_AGENT, __version__
         self._session_id = _uuid.uuid4().hex
+        # v0.3.2 — solver_env lets the pool give data-backed tuning
+        # recommendations. Mirrors the SolverEnv constructed for the
+        # solver wrapper above; canonical BTX_MATMUL_* names.
+        solver_env = {
+            "BTX_MATMUL_BACKEND": self.cfg.solver_backend,
+            "BTX_MATMUL_GPU_INPUTS": self.cfg.gpu_inputs,
+            "BTX_MATMUL_SOLVE_BATCH_SIZE": self.cfg.solver_batch_size,
+            "BTX_MATMUL_PREPARE_PREFETCH_DEPTH": self.cfg.solver_prefetch_depth,
+            "BTX_MATMUL_PREPARE_WORKERS": self.cfg.solver_prepare_workers,
+            "BTX_MATMUL_PIPELINE_ASYNC": self.cfg.solver_pipeline_async,
+            "BTX_MATMUL_SOLVER_THREADS": self.cfg.solver_threads,
+        }
         hw = hardware.collect_static_hardware(
             miner_version=__version__,
             cpu_threads_allocated=self.cfg.solver_threads,
+            solver_env=solver_env,
         )
         log.info("hardware: %s", hardware.hardware_summary_string(hw))
         extension = {
