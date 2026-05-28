@@ -84,7 +84,35 @@ Expect: `libamdhip64.so.6 => /opt/rocm/lib/libamdhip64.so.6` (or wherever ROCm i
 
 ### 5. Pool mining smoke (5 minutes)
 
-Install `dexbtx-miner` per <https://minebtx.com>, then point its `gbt_solve_path` config at this binary instead of the CUDA one. Connect to the pool stratum endpoint, watch logs:
+Install **`dexbtx-miner` v0.3.2+** (older versions don't send solver env vars,
+so the pool can't give you tuning feedback):
+
+```bash
+curl -sSL https://minebtx.com/install.sh | bash
+```
+
+That drops `dexbtx-miner` + a default config + the **CUDA** `btx-gbt-solve`.
+Replace the CUDA binary with this one:
+
+```bash
+# Find where install.sh dropped the solver
+which btx-gbt-solve     # or: find ~ -name btx-gbt-solve
+
+# Replace it (path will vary)
+cp ./btx-gbt-solve /path/to/installed/btx-gbt-solve
+chmod +x /path/to/installed/btx-gbt-solve
+```
+
+Or set `gbt_solve_path` explicitly in your `~/.dexbtx-miner/config.yaml`:
+
+```yaml
+gbt_solve_path: /full/path/to/our/rocm/btx-gbt-solve
+pool_host: minebtx.com
+pool_port: 3333
+worker: <your-btx1z-address>.amd-test
+```
+
+Then run `dexbtx-miner` and watch logs:
 
 - ✅ Shares get accepted → working
 - ❌ Many "share rejected: pre_hash" or "matmul phase2 proof of work failed" → binary bug, stop and report
