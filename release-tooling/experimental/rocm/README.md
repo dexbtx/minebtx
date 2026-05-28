@@ -84,35 +84,39 @@ Expect: `libamdhip64.so.6 => /opt/rocm/lib/libamdhip64.so.6` (or wherever ROCm i
 
 ### 5. Pool mining smoke (5 minutes)
 
-Install **`dexbtx-miner` v0.3.2+** (older versions don't send solver env vars,
-so the pool can't give you tuning feedback):
+Run `dexbtx-miner`'s installer first (it ships **dexbtx-miner v0.3.2+** —
+older versions don't send solver env vars, so the pool can't give you
+tuning feedback):
 
 ```bash
 curl -sSL https://minebtx.com/install.sh | bash
 ```
 
-That drops `dexbtx-miner` + a default config + the **CUDA** `btx-gbt-solve`.
-Replace the CUDA binary with this one:
+`install.sh` doesn't detect AMD GPUs — it'll treat your box as "CPU-only",
+drop the **CUDA** `btx-gbt-solve` at `~/.dexbtx-miner/bin/btx-gbt-solve`,
+and skip the GPU smoke test. That's fine. You then overwrite the CUDA
+binary with this one:
 
 ```bash
-# Find where install.sh dropped the solver
-which btx-gbt-solve     # or: find ~ -name btx-gbt-solve
-
-# Replace it (path will vary)
-cp ./btx-gbt-solve /path/to/installed/btx-gbt-solve
-chmod +x /path/to/installed/btx-gbt-solve
+wget -O ~/.dexbtx-miner/bin/btx-gbt-solve \
+    https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v5.0-experimental-rocm/btx-gbt-solve
+chmod +x ~/.dexbtx-miner/bin/btx-gbt-solve
 ```
 
-Or set `gbt_solve_path` explicitly in your `~/.dexbtx-miner/config.yaml`:
+The config `install.sh` wrote at `~/.dexbtx-miner/config.yaml` is already
+correct for HIP — it sets `solver_backend: "cuda"` (which is what HIP uses
+via macro shims), points `gbt_solve_path` at the binary you just overwrote,
+and pre-fills `pool_host: minebtx.com`, `pool_port: 3333`. You don't need
+to edit it; just make sure `payout_address` is your BTX address (the
+installer prompts you for it).
 
-```yaml
-gbt_solve_path: /full/path/to/our/rocm/btx-gbt-solve
-pool_host: minebtx.com
-pool_port: 3333
-worker: <your-btx1z-address>.amd-test
+Then start mining:
+
+```bash
+LD_LIBRARY_PATH=/opt/rocm/lib dexbtx-miner --config ~/.dexbtx-miner/config.yaml
 ```
 
-Then run `dexbtx-miner` and watch logs:
+Watch logs:
 
 - ✅ Shares get accepted → working
 - ❌ Many "share rejected: pre_hash" or "matmul phase2 proof of work failed" → binary bug, stop and report
