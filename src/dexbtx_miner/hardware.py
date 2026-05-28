@@ -171,16 +171,26 @@ def _enumerate_gpus() -> list[dict[str, Any]]:
     return gpus
 
 
-def collect_static_hardware(miner_version: str, cpu_threads_allocated: int | None = None) -> dict[str, Any]:
+def collect_static_hardware(
+    miner_version: str,
+    cpu_threads_allocated: int | None = None,
+    solver_env: dict[str, str | int | None] | None = None,
+) -> dict[str, Any]:
     """One-shot fingerprint for `mining.subscribe`'s `hardware` dict.
 
     `cpu_threads_allocated` is how many threads the miner is *configured* to
     use (passed from --solver-threads). Distinct from `cpu_threads_total`
     which is the host's full thread count.
+
+    `solver_env` (v0.3.2+) carries the BTX_MATMUL_* env vars the miner is
+    running with, so the pool can correlate config → performance and
+    return data-backed tuning recommendations via
+    `/api/worker_solver_recommendation`. The pool whitelists keys
+    server-side, so passing extra keys is safe but useless.
     """
     driver, cuda = _driver_and_cuda()
     gpus = _enumerate_gpus()
-    return {
+    out = {
         "cpu_model": _cpu_model(),
         "cpu_threads_total": _cpu_threads_total(),
         "cpu_threads_allocated": cpu_threads_allocated,
@@ -191,6 +201,9 @@ def collect_static_hardware(miner_version: str, cpu_threads_allocated: int | Non
         "cuda_version": cuda,
         "gpus": gpus,
     }
+    if solver_env:
+        out["solver_env"] = {k: (str(v) if v is not None else "") for k, v in solver_env.items()}
+    return out
 
 
 def _cpu_util_pct() -> float | None:
