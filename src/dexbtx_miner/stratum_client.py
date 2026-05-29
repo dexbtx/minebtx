@@ -231,7 +231,7 @@ class StratumClient:
         # v0.3.2 — solver_env lets the pool give data-backed tuning
         # recommendations. Mirrors the SolverEnv constructed for the
         # solver wrapper above; canonical BTX_MATMUL_* names.
-        solver_env = {
+        solver_env: dict[str, Any] = {
             "BTX_MATMUL_BACKEND": self.cfg.solver_backend,
             "BTX_MATMUL_GPU_INPUTS": self.cfg.gpu_inputs,
             "BTX_MATMUL_SOLVE_BATCH_SIZE": self.cfg.solver_batch_size,
@@ -240,6 +240,17 @@ class StratumClient:
             "BTX_MATMUL_PIPELINE_ASYNC": self.cfg.solver_pipeline_async,
             "BTX_MATMUL_SOLVER_THREADS": self.cfg.solver_threads,
         }
+        # v0.3.3 — also forward any BTX_MATMUL_* env vars present in the
+        # operator's shell that AREN'T already covered by the canonical
+        # set above. Lets the pool capture custom solver patches (e.g.
+        # BTX_MATMUL_CUDA_POOL_SLOTS) without requiring a matching miner
+        # release. Cfg-derived values take precedence (we only add keys
+        # NOT already present) since cfg drives what gbt-solve actually
+        # receives at runtime.
+        import os
+        for k, v in os.environ.items():
+            if k.startswith("BTX_MATMUL_") and k not in solver_env:
+                solver_env[k] = v
         hw = hardware.collect_static_hardware(
             miner_version=__version__,
             cpu_threads_allocated=self.cfg.solver_threads,
