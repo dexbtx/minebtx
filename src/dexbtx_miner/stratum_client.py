@@ -255,6 +255,7 @@ class StratumClient:
             miner_version=__version__,
             cpu_threads_allocated=self.cfg.solver_threads,
             solver_env=solver_env,
+            solver_path=self.cfg.gbt_solve_path,
         )
         log.info("hardware: %s", hardware.hardware_summary_string(hw))
         extension = {

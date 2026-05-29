@@ -175,6 +175,7 @@ def collect_static_hardware(
     miner_version: str,
     cpu_threads_allocated: int | None = None,
     solver_env: dict[str, str | int | None] | None = None,
+    solver_path: str | None = None,
 ) -> dict[str, Any]:
     """One-shot fingerprint for `mining.subscribe`'s `hardware` dict.
 
@@ -187,9 +188,20 @@ def collect_static_hardware(
     return data-backed tuning recommendations via
     `/api/worker_solver_recommendation`. The pool whitelists keys
     server-side, so passing extra keys is safe but useless.
+
+    v0.3.4 adds four new categories so the pool's bucket-aware recommender
+    can detect rental hosts, NUMA topology, and silent CPU fallback:
+      - rental / containerization signals (cgroup quota, hostname, /.dockerenv)
+      - NUMA topology + GPU node affinity (drives `numactl` recommendation)
+      - active_backend probe (catches silent CPU fallback)
+      - `power_cap_writable` (suppresses unactionable `nvidia-smi -pl` advice
+        on rentals where the operator can't modify the cap)
     """
     driver, cuda = _driver_and_cuda()
     gpus = _enumerate_gpus()
+    env = _detect_environment()
+    numa = _collect_numa_topology(gpus)
+    backend = _probe_active_backend(solver_path)
     out = {
         "cpu_model": _cpu_model(),
         "cpu_threads_total": _cpu_threads_total(),
@@ -200,10 +212,281 @@ def collect_static_hardware(
         "driver_version": driver,
         "cuda_version": cuda,
         "gpus": gpus,
+        # v0.3.4 fields — all NULL-tolerant on pool side
+        "host_hostname": _hostname(),
+        "is_containerized": env["is_containerized"],
+        "cpu_threads_effective": env["cpu_threads_effective"],
+        "rental_provider": env["rental_provider"],
+        "power_cap_writable": env["power_cap_writable"],
+        "numa": numa,                         # dict or None
+        "active_backend": backend["active"],  # str or None
+        "cuda_arch_supported": backend["cuda_archs"],  # str or None
     }
     if solver_env:
         out["solver_env"] = {k: (str(v) if v is not None else "") for k, v in solver_env.items()}
     return out
+
+
+def _hostname() -> str | None:
+    try:
+        import socket
+        return socket.gethostname()
+    except Exception:
+        return None
+
+
+def _detect_environment() -> dict[str, Any]:
+    """Detect whether we're on a containerized rental, and what the
+    effective CPU allocation is. Five layered signals (any positive ⇒
+    container). Effective threads come from cgroup CPU quota — the
+    'real' budget vs `nproc`'s host total.
+    """
+    info = {
+        "is_containerized": False,
+        "cpu_threads_effective": None,
+        "rental_provider": None,
+        "power_cap_writable": False,
+    }
+    # /.dockerenv is the simplest signal
+    try:
+        import os.path as _op
+        if _op.exists("/.dockerenv"):
+            info["is_containerized"] = True
+    except Exception:
+        pass
+    # cgroup file content
+    try:
+        with open("/proc/self/cgroup", "r") as f:
+            cg = f.read()
+        if any(m in cg for m in ("docker", "containerd", "kubepods", "lxc")):
+            info["is_containerized"] = True
+    except Exception:
+        pass
+    # cgroup v2 CPU quota
+    try:
+        with open("/sys/fs/cgroup/cpu.max", "r") as f:
+            parts = f.read().strip().split()
+        if len(parts) == 2 and parts[0] != "max":
+            quota = int(parts[0])
+            period = int(parts[1])
+            if quota > 0 and period > 0:
+                info["cpu_threads_effective"] = round(quota / period, 2)
+    except Exception:
+        # cgroup v1 fallback
+        try:
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "r") as f:
+                quota = int(f.read().strip())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us", "r") as f:
+                period = int(f.read().strip())
+            if quota > 0 and period > 0:
+                info["cpu_threads_effective"] = round(quota / period, 2)
+        except Exception:
+            pass
+    # Rental provider hint from hostname
+    hn = _hostname() or ""
+    hn_low = hn.lower()
+    if "vast.ai" in hn_low or "vast-" in hn_low:
+        info["rental_provider"] = "vast.ai"
+    elif "runpod" in hn_low:
+        info["rental_provider"] = "runpod"
+    elif "autodl" in hn_low or "container-fnubq" in hn_low:
+        info["rental_provider"] = "autodl"
+    elif "paperspace" in hn_low:
+        info["rental_provider"] = "paperspace"
+    # Power-cap writable probe: try a no-op set to current limit. If we
+    # get "Insufficient Permissions" or similar, the host owns the cap.
+    # We never actually CHANGE the power limit — just probe whether we could.
+    info["power_cap_writable"] = _probe_power_cap_writable()
+    return info
+
+
+def _probe_power_cap_writable() -> bool:
+    """Returns True iff `nvidia-smi -pl <current>` would succeed (i.e.,
+    we have permission). Does NOT change the power cap — sets it to its
+    own current value as a no-op probe. Errors out gracefully if
+    nvidia-smi isn't present (CPU-only or non-NVIDIA hosts)."""
+    try:
+        import subprocess
+        # Read current power limit
+        cur = subprocess.run(
+            ["nvidia-smi", "--query-gpu=power.limit", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if cur.returncode != 0 or not cur.stdout.strip():
+            return False
+        try:
+            limit = int(float(cur.stdout.strip().split("\n")[0]))
+        except (ValueError, IndexError):
+            return False
+        # No-op set
+        probe = subprocess.run(
+            ["nvidia-smi", "-i", "0", "-pl", str(limit)],
+            capture_output=True, text=True, timeout=5,
+        )
+        return probe.returncode == 0
+    except Exception:
+        return False
+
+
+def _collect_numa_topology(gpus: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Read NUMA topology from /sys/devices/system/node/ and map each GPU's
+    PCIe device to its NUMA node. Returns None on non-NUMA hosts or when
+    we can't read the sysfs view (no need to send empty data).
+    """
+    import os as _os
+    import os.path as _op
+    nodes = []
+    node_dir = "/sys/devices/system/node"
+    if not _op.isdir(node_dir):
+        return None
+    try:
+        for entry in sorted(_os.listdir(node_dir)):
+            if not entry.startswith("node") or not entry[4:].isdigit():
+                continue
+            node_id = int(entry[4:])
+            try:
+                with open(_op.join(node_dir, entry, "cpulist"), "r") as f:
+                    cpus = f.read().strip()
+            except Exception:
+                cpus = ""
+            nodes.append({"id": node_id, "cpu_range": cpus})
+    except Exception:
+        return None
+    if len(nodes) <= 1:
+        # Single-NUMA host — no pinning advice needed.
+        return {"nodes": len(nodes), "topology": nodes, "gpu_numa_affinity": {}}
+
+    # Map each GPU to its NUMA node via /sys/bus/pci/devices/<bdf>/numa_node.
+    # We get the PCI BDF from nvidia-smi -q -d MEMORY (or the gpu_uuid → BDF
+    # path), but the simplest is to walk /sys/bus/pci and match GPU class
+    # 0x030200 (3D controller).
+    gpu_affinity: dict[str, int] = {}
+    try:
+        for entry in _os.listdir("/sys/bus/pci/devices"):
+            try:
+                with open(_op.join("/sys/bus/pci/devices", entry, "class"), "r") as f:
+                    cls = f.read().strip()
+                # PCI classes: 0x030000 (VGA), 0x030200 (3D controller).
+                # NVIDIA GPUs may register as either.
+                if not (cls.startswith("0x0300") or cls.startswith("0x0302")):
+                    continue
+                with open(_op.join("/sys/bus/pci/devices", entry, "vendor"), "r") as f:
+                    vendor = f.read().strip()
+                # NVIDIA vendor ID is 0x10de
+                if vendor != "0x10de":
+                    continue
+                with open(_op.join("/sys/bus/pci/devices", entry, "numa_node"), "r") as f:
+                    node_raw = f.read().strip()
+                node = int(node_raw)
+                if node < 0:
+                    # NUMA node -1 = unknown (single-NUMA or undefined).
+                    continue
+                # We can't easily match BDF → gpu_uuid here without parsing
+                # nvidia-smi. Use the entry BDF as the key; pool can still
+                # use a node count + an "any GPU's node" hint to drive
+                # the numactl command.
+                gpu_affinity[entry] = node
+            except Exception:
+                continue
+    except Exception:
+        pass
+    # Also try the canonical mapping via nvidia-smi --query-gpu=uuid,pci_bus_id
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=uuid,pci.bus_id", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            uuid_to_node = {}
+            for line in out.stdout.strip().split("\n"):
+                if "," not in line:
+                    continue
+                uuid, bus_id = (x.strip() for x in line.split(",", 1))
+                # bus_id format: 00000000:01:00.0  →  /sys/bus/pci uses 0000:01:00.0
+                norm = bus_id.lower()
+                if len(norm) == len("00000000:01:00.0"):
+                    norm = norm[4:]  # strip leading domain to match sysfs
+                if norm in gpu_affinity:
+                    uuid_to_node[uuid] = gpu_affinity[norm]
+            if uuid_to_node:
+                gpu_affinity = uuid_to_node
+    except Exception:
+        pass
+
+    return {
+        "nodes": len(nodes),
+        "topology": nodes,
+        "gpu_numa_affinity": gpu_affinity,
+    }
+
+
+def _probe_active_backend(solver_path: str | None) -> dict[str, Any]:
+    """Probe the solver binary for its active backend + supported CUDA
+    archs. Detects silent CPU fallback (B58-class) and binary/arch
+    mismatch (e.g. running a sm_89-only binary on a Blackwell card).
+    Returns {"active": "cuda"|"cpu"|None, "cuda_archs": "89,120"|None}.
+    """
+    result: dict[str, Any] = {"active": None, "cuda_archs": None}
+    if not solver_path:
+        return result
+    import subprocess, os as _os, os.path as _op
+    if not _op.isfile(solver_path) or not _os.access(solver_path, _os.X_OK):
+        return result
+    # Active backend: btx-matmul-backend-info preferred; fall back to
+    # `--help` heuristics if not available.
+    try:
+        # Many builds ship a helper binary alongside btx-gbt-solve.
+        helper = _op.join(_op.dirname(solver_path), "btx-matmul-backend-info")
+        if _op.isfile(helper) and _os.access(helper, _os.X_OK):
+            out = subprocess.run(
+                [helper, "--backend", "cuda"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if out.returncode == 0:
+                # Output is JSON typically. Look for "active_backend".
+                import json as _json
+                try:
+                    data = _json.loads(out.stdout)
+                    result["active"] = data.get("active_backend")
+                except _json.JSONDecodeError:
+                    # Plain-text fallback
+                    for line in out.stdout.split("\n"):
+                        if "active_backend" in line.lower():
+                            parts = line.split(":", 1)
+                            if len(parts) == 2:
+                                result["active"] = parts[1].strip().strip('"')
+                                break
+    except Exception:
+        pass
+    # CUDA archs: peek at the binary via cuobjdump if available, otherwise
+    # via embedded sm_NN strings (works for our HIP build too).
+    try:
+        out = subprocess.run(
+            ["cuobjdump", "--list-elf", solver_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode == 0:
+            import re
+            archs = sorted(set(re.findall(r"sm_(\d+)", out.stdout)))
+            if archs:
+                result["cuda_archs"] = ",".join(archs)
+    except Exception:
+        pass
+    # Last-resort: scan strings(1) for sm_NN and gfx markers
+    if result["cuda_archs"] is None:
+        try:
+            out = subprocess.run(
+                ["strings", solver_path],
+                capture_output=True, text=True, timeout=15,
+            )
+            import re
+            archs = sorted(set(re.findall(r"\bsm_(\d+)\b", out.stdout)))
+            if archs:
+                result["cuda_archs"] = ",".join(archs)
+        except Exception:
+            pass
+    return result
 
 
 def _cpu_util_pct() -> float | None:
