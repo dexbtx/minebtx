@@ -23,8 +23,8 @@ set -euo pipefail
 # ─── Configurables ──────────────────────────────────────────────────────────
 # Pin the prebuilds release tag. install.sh always pulls this version.
 # Bump in lockstep with experiments/vast/prebuilds and pyproject.toml.
-PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v5.0}"
-EXPECTED_SHA256="${EXPECTED_SHA256:-f750e55fee7ab1f7f7936487d1372f567e26f2df383a307589b1810f42c3247a}"
+PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v6.0}"
+EXPECTED_SHA256="${EXPECTED_SHA256:-999d6f5e2f70b5f51dc1ac4c97f238bfc6c160f20d3fe12d6f3b74dae42d025e}"
 PREBUILDS_BASE="${PREBUILDS_BASE:-https://github.com/dexbtx/minebtx/releases/download/${PREBUILDS_TAG}}"
 SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve"
 
