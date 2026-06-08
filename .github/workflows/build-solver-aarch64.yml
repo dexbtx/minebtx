@@ -33,11 +33,22 @@ on:
         type: choice
         options: ['12-8', '13-0']
         default: '12-8'
+      publish_release:
+        description: 'Attach the binary to the prebuilds release as btx-gbt-solve-aarch64-linux-gnu-cuda<major>'
+        required: true
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag to attach the asset to (when publish_release=true)'
+        required: true
+        default: 'btx-prebuilds-v0.32.2'
 
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
+    permissions:
+      contents: write   # for the optional gh release upload step
     steps:
       - name: Checkout this repo (for patches)
         uses: actions/checkout@v4
@@ -149,6 +160,25 @@ jobs:
           echo "=== .nv_fatbin section present? ==="
           readelf -S bin/btx-gbt-solve 2>/dev/null | grep -E "nv_fatbin|nvFatBin" | head -3 || true
 
+      - name: Verify bit-equivalence (CPU) vs post-125000 V2 reference
+        working-directory: btx-src/build
+        run: |
+          set -euo pipefail
+          # The ARM runner has no GPU, so we can't exercise the CUDA kernel here
+          # (the cuobjdump/nv_fatbin checks above confirm the cubins are present).
+          # But the CPU backend runs fine and shares the consensus seed/digest
+          # path, so this gate proves the build is V2-aware (post-block-125000
+          # nonce-seed) and consensus-correct — catching a wrong/v1 source.
+          REF="$GITHUB_WORKSPACE/.github/build-patches/ci-refvec.json"
+          EXP="$(python3 -c "import json;print(json.load(open('$REF'))['expected']['matmul_digest'])")"
+          VEC="$(python3 -c "import json;print(json.dumps(json.load(open('$REF'))['job']))")"
+          echo "expected: $EXP"
+          GOT="$(echo "$VEC" | BTX_MATMUL_BACKEND=cpu bin/btx-gbt-solve --daemon --backend cpu --solver-threads 1 2>/dev/null \
+                 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("matmul_digest","NONE"))')"
+          echo "got (cpu): $GOT"
+          [ "$GOT" = "$EXP" ] || { echo "FAIL: CPU digest mismatch — kernel/source wrong or not V2-aware"; exit 1; }
+          echo "PASS: CPU kernel is consensus-correct post-125000 (V2). CUDA cubins verified structurally above."
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -156,3 +186,15 @@ jobs:
           path: btx-src/build/bin/btx-gbt-solve
           retention-days: 30
           if-no-files-found: error
+
+      - name: Publish to release (optional)
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CUDA_MAJOR="${{ inputs.cuda_version }}"; CUDA_MAJOR="${CUDA_MAJOR%%-*}"
+          ASSET="btx-gbt-solve-aarch64-linux-gnu-cuda${CUDA_MAJOR}"
+          cp btx-src/build/bin/btx-gbt-solve "$ASSET"
+          echo "sha256 to pin in install.sh (AARCH64_CUDA${CUDA_MAJOR}_SHA256): $(sha256sum "$ASSET" | awk '{print $1}')"
+          gh release upload "${{ inputs.release_tag }}" "$ASSET" --repo "${{ github.repository }}" --clobber
