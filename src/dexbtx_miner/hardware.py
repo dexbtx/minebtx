@@ -195,6 +195,76 @@ def _apple_gpus() -> list[dict[str, Any]]:
     }]
 
 
+def _rocm_smi_json(args: list[str]) -> dict[str, Any] | None:
+    out = _run(["rocm-smi", *args, "--json"])
+    if not out:
+        return None
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        return None
+
+
+def _amd_gfx_target() -> str | None:
+    """AMD GPU arch like 'gfx1100' (RDNA3). rocminfo is the most reliable source."""
+    out = _run(["rocminfo"])
+    if out:
+        m = re.search(r"\bgfx\d{3,4}[a-z]?\b", out)
+        if m:
+            return m.group(0)
+    j = _rocm_smi_json(["--showgcnversion"])
+    if j:
+        for info in j.values():
+            for v in info.values():
+                m = re.search(r"gfx\d{3,4}[a-z]?", str(v))
+                if m:
+                    return m.group(0)
+    return None
+
+
+def _amd_gpus() -> list[dict[str, Any]]:
+    """Per-GPU info for AMD/ROCm hosts via rocm-smi (the HIP build is a separate
+    binary from CUDA, so an AMD host has rocm-smi, not nvidia-smi). Shaped for
+    the pool's canonical namer: model -> name prefix, gpu_uuid -> stable anchor.
+    Returns [] when rocm-smi is absent (i.e. not an AMD/ROCm host)."""
+    if platform.system() != "Linux":
+        return []
+    j = _rocm_smi_json(["--showproductname", "--showuniqueid", "--showmeminfo", "vram"])
+    if not j:
+        return []
+    gfx = _amd_gfx_target()
+    slug = re.sub(r"[^a-z0-9]", "", (gfx or "amdgpu").lower())
+    gpus: list[dict[str, Any]] = []
+    for card, info in j.items():
+        if not str(card).lower().startswith("card"):
+            continue
+        low = {str(k).lower(): v for k, v in info.items()}
+        model = (low.get("card series") or low.get("card model")
+                 or low.get("device name") or low.get("gpu id") or "AMD GPU")
+        model = str(model).strip() or "AMD GPU"
+        if not re.search(r"amd|radeon|instinct", model, re.I):
+            model = f"AMD {model}"
+        uniq = str(low.get("unique id", "")).strip()
+        ident = re.sub(r"[^a-z0-9]", "", uniq.lower()) if uniq else ""
+        if not ident:
+            ident = re.sub(r"[^a-z0-9]", "", str(card).lower()) + "-" + (_hostname() or "unknown").lower()
+        vram_gb: float | None = None
+        for k, v in low.items():
+            if "vram total memory" in k:
+                try:
+                    vram_gb = round(int(str(v)) / (1024 ** 3), 2)
+                except ValueError:
+                    pass
+        gpus.append({
+            "model": model,
+            "vram_gb": vram_gb if vram_gb is not None else 0,
+            "compute_capability": gfx or "rocm",
+            "pcie_link": None,
+            "gpu_uuid": f"amd-{slug}-{ident}",
+        })
+    return gpus
+
+
 def _enumerate_gpus() -> list[dict[str, Any]]:
     """Per-GPU static info: model, vram, compute capability, pcie link, uuid."""
     if platform.system() == "Darwin":
@@ -220,6 +290,9 @@ def _enumerate_gpus() -> list[dict[str, Any]]:
             "pcie_link": pcie_link,
             "gpu_uuid": uuid,
         })
+    if not gpus:
+        # No NVIDIA GPU — try AMD/ROCm (separate binary; rocm-smi present there).
+        gpus = _amd_gpus()
     return gpus
 
 
@@ -608,6 +681,13 @@ def _gpu_runtime() -> list[dict[str, Any]]:
             "power_w": power_w,
             "temp_c": temp_c,
         })
+    if not out:
+        # AMD/ROCm host: report the static uuid so the dashboard associates the
+        # GPU. (Per-GPU util/power parsing from rocm-smi is left for later.)
+        amd = _amd_gpus()
+        if amd:
+            out = [{"gpu_uuid": amd[0]["gpu_uuid"], "util_pct": None,
+                    "power_w": None, "temp_c": None}]
     return out
 
 
