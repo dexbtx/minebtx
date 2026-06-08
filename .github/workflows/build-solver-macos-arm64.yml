@@ -108,7 +108,9 @@ jobs:
         working-directory: btx-src/build
         run: |
           set -euo pipefail
-          BIN="$(find . -name btx-gbt-solve -type f -perm +111 | head -1)"
+          # Absolute path so later steps (which run from the workspace root)
+          # can find it regardless of working-directory.
+          BIN="$(find "$PWD" -name btx-gbt-solve -type f -perm +111 | head -1)"
           echo "BIN=$BIN" >> "$GITHUB_ENV"
           ls -la "$BIN"
           file "$BIN"
