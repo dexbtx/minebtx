@@ -28,7 +28,9 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import shutil
+import sys
 import tempfile
 import time
 import urllib.error
@@ -54,6 +56,84 @@ _DOWNLOAD_TIMEOUT_S = 300
 class SolverUpdateRequired(RuntimeError):
     """Raised when `min_required_sha256` is set, local doesn't match, and
     auto-update couldn't satisfy the requirement. Mining must not proceed."""
+
+
+def detect_platform_key() -> str | None:
+    """Return a manifest-schema platform key for this host.
+
+    Returns a string like "x86_64-linux", "aarch64-linux", "arm64-darwin",
+    or None if the platform isn't one we recognize. Operators can override
+    via the `DEXBTX_PLATFORM_KEY` env var (useful for cross-test or for
+    cuda12-vs-cuda13 disambiguation on aarch64-linux).
+    """
+    override = os.environ.get("DEXBTX_PLATFORM_KEY")
+    if override:
+        return override.strip()
+
+    machine = platform.machine().lower()
+    system = sys.platform  # "linux", "darwin", "win32"
+
+    if system == "linux":
+        if machine in ("x86_64", "amd64"):
+            return "x86_64-linux"
+        if machine in ("aarch64", "arm64"):
+            return "aarch64-linux"
+    elif system == "darwin":
+        if machine == "arm64":
+            return "arm64-darwin"
+        if machine == "x86_64":
+            return "x86_64-darwin"
+
+    return None
+
+
+def _resolve_manifest_entry(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """Pick the binary entry for this host from the manifest.
+
+    Supports BOTH the v1 single-binary schema (top-level sha256+url) AND the
+    v2 platforms-dict schema. v1 is kept so a manifest pinned to a single
+    Linux x86_64 binary still works for that platform exactly as before.
+    """
+    # v2: {"platforms": {"x86_64-linux": {...}, ...}}
+    if "platforms" in manifest:
+        platforms = manifest["platforms"]
+        if not isinstance(platforms, dict):
+            log.warning("solver auto-update: manifest.platforms is not a dict")
+            return None
+        key = detect_platform_key()
+        if key is None:
+            log.warning(
+                "solver auto-update: this platform (%s/%s) isn't recognized; no auto-update",
+                platform.machine(), sys.platform,
+            )
+            return None
+        entry = platforms.get(key)
+        if entry is None:
+            log.warning(
+                "solver auto-update: no manifest entry for platform=%s; available=%s",
+                key, sorted(platforms.keys()),
+            )
+            return None
+        # Synthesize a v1-shaped entry so the rest of the flow is unchanged.
+        return {
+            "sha256": entry.get("sha256"),
+            "url": entry.get("url"),
+            "version": manifest.get("version", entry.get("version", "unknown")),
+            "min_required_sha256": entry.get("min_required_sha256"),
+            "force_upgrade_reason": entry.get("force_upgrade_reason")
+                                    or manifest.get("force_upgrade_reason"),
+            "_platform_key": key,
+        }
+
+    # v1: legacy top-level sha256+url, assumed to be x86_64-linux
+    return {
+        "sha256": manifest.get("sha256"),
+        "url": manifest.get("url"),
+        "version": manifest.get("version", "unknown"),
+        "min_required_sha256": manifest.get("min_required_sha256"),
+        "force_upgrade_reason": manifest.get("force_upgrade_reason"),
+        "_platform_key": "(legacy)",
+    }
 
 
 def _sha256_file(path: str | os.PathLike[str]) -> str | None:
@@ -159,11 +239,16 @@ def maybe_update_solver(
     if manifest is None:
         return False  # already warned
 
-    target_sha = manifest.get("sha256")
-    target_url = manifest.get("url")
-    target_ver = manifest.get("version", "unknown")
-    min_required = manifest.get("min_required_sha256")
-    reason = manifest.get("force_upgrade_reason")
+    entry = _resolve_manifest_entry(manifest)
+    if entry is None:
+        return False
+
+    target_sha = entry["sha256"]
+    target_url = entry["url"]
+    target_ver = entry["version"]
+    min_required = entry["min_required_sha256"]
+    reason = entry["force_upgrade_reason"]
+    plat = entry["_platform_key"]
 
     if not isinstance(target_sha, str) or len(target_sha) != 64:
         log.warning("solver auto-update: manifest missing valid sha256")
@@ -175,13 +260,14 @@ def maybe_update_solver(
     current_sha = _sha256_file(solver_path)
     if current_sha == target_sha:
         log.info(
-            "solver auto-update: up-to-date (version=%s sha=%s) [check=%.0fms]",
-            target_ver, target_sha[:12], (time.time() - started) * 1000,
+            "solver auto-update: up-to-date (platform=%s version=%s sha=%s) [check=%.0fms]",
+            plat, target_ver, target_sha[:12], (time.time() - started) * 1000,
         )
         return False
 
     log.info(
-        "solver auto-update: %s -> %s (reason=%s)",
+        "solver auto-update: platform=%s %s -> %s (reason=%s)",
+        plat,
         (current_sha or "missing")[:12],
         target_sha[:12],
         reason or "routine",

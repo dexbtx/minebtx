@@ -1,10 +1,36 @@
 {
-  "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. Bump version + sha256 + url whenever a new btx-gbt-solve is published. Set min_required_sha256 to enforce a hard floor at fork boundaries — miners on a different SHA will refuse to mine until they upgrade (unless DEXBTX_NO_SOLVER_AUTOUPDATE=1).",
+  "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
   "version": "0.3.5.2",
-  "sha256": "b9251a06133abb90a71d714c3a83ea9accb71ba81352b6226ca50c7e5fae5032",
-  "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve",
-  "min_required_sha256": null,
-  "force_upgrade_reason": null,
   "released_at": "2026-06-08",
-  "notes": "LTO-enabled rebuild against BTX v0.32.2 source. Restores share_target_override, activates nMatMulNonceSeedHeight=125000. ~3-5x throughput vs the initial non-LTO v0.32.2 build."
+  "notes": "Multi-platform release. x86_64-linux is LTO-enabled v0.32.2 rebuild (restores share_target_override, V2 nonce-seed at h=125000). aarch64 builds via GitHub Actions on Linux arm64 runner (cuda 12.8 or 13.0). darwin-arm64 is the Mac Metal test build.",
+  "platforms": {
+    "x86_64-linux": {
+      "sha256": "b9251a06133abb90a71d714c3a83ea9accb71ba81352b6226ca50c7e5fae5032",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve",
+      "min_required_sha256": null,
+      "force_upgrade_reason": null,
+      "notes": "GCC 11.4, CUDA 12.8, archs: sm_61;sm_75;sm_86;sm_89;sm_90;sm_120. LTO enabled."
+    },
+    "aarch64-linux": {
+      "sha256": "1ce59bf6b6a0f720973f75627ec7f8d5bd2f776c3151b54053a56dbd8b3efd18",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-aarch64-linux-gnu-cuda13",
+      "min_required_sha256": null,
+      "force_upgrade_reason": null,
+      "notes": "Default aarch64-linux entry. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + A100/H100/RTX-Blackwell. Requires CUDA 13.0+ runtime. For operators with only CUDA 12 runtime, set DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12 to fetch the cuda12 build instead."
+    },
+    "aarch64-linux-cuda12": {
+      "sha256": "240f6560e756c65fbc81eca17086e7f3773db764b04bd850341b04b6c3bf0441",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-aarch64-linux-gnu-cuda12",
+      "min_required_sha256": null,
+      "force_upgrade_reason": null,
+      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. CUDA 12.8 build, archs sm_80;sm_90;sm_120. No sm_121 (use cuda13 build for GB10)."
+    },
+    "arm64-darwin": {
+      "sha256": "6d773b8b4e74d5b538102c24f67503004c407d555d0201636632d93a05f6516a",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-darwin-arm64",
+      "min_required_sha256": null,
+      "force_upgrade_reason": null,
+      "notes": "Apple Silicon (M-series). Mac Metal backend. EXPERIMENTAL — not yet end-to-end-validated on real Mac mining; treat as test build. Operators should verify --backend metal engages with `powermetrics` or `asitop` before relying on it."
+    }
+  }
 }

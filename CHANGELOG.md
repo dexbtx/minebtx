@@ -4,6 +4,62 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.7] — 2026-06-08 (per-platform binary dispatch in solver auto-update)
+
+### Why
+v0.3.6 shipped solver auto-update with a single-binary manifest schema
+that implicitly assumed Linux x86_64. With aarch64 (Grace, GB10/Spark)
+and Mac (Apple Silicon) binaries now published alongside the x86_64 one,
+miners on those platforms need the auto-updater to pick the right
+binary, not the Linux x86_64 one.
+
+### How
+
+`.solver-channel.json` extended from `{sha256, url}` to a `{platforms:
+{...}}` dict keyed by `{arch}-{system}` (e.g. `x86_64-linux`,
+`aarch64-linux`, `arm64-darwin`). The wrapper detects the host's
+platform via `platform.machine() + sys.platform`, looks up the matching
+entry, and downloads + verifies the right binary for THIS host.
+
+The legacy v1 schema (top-level sha256+url) is still recognized —
+treated as x86_64-linux only. So manifests published before v0.3.7
+still work for x86_64-linux miners, but won't auto-update aarch64 or
+darwin miners (the v2 schema is required for those).
+
+### Platform keys recognized
+
+| Key | Detected when |
+|---|---|
+| `x86_64-linux` | `platform.machine() in (x86_64, amd64)` and Linux |
+| `aarch64-linux` | `platform.machine() in (aarch64, arm64)` and Linux |
+| `arm64-darwin` | `platform.machine() == arm64` and macOS |
+| `x86_64-darwin` | `platform.machine() == x86_64` and macOS (Intel Mac) |
+
+Operator override: `DEXBTX_PLATFORM_KEY=<any-key>` env var forces a
+specific manifest entry. Useful for cuda12-vs-cuda13 disambiguation on
+aarch64-linux (default picks cuda13; set `DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12`
+to fetch the cuda12 build).
+
+### What changed
+
+- `src/dexbtx_miner/solver_updater.py`: added `detect_platform_key()` +
+  `_resolve_manifest_entry()`; refactored `maybe_update_solver` to use them.
+- `.solver-channel.json`: rewrote to v2 schema with 4 platform entries
+  (x86_64-linux, aarch64-linux, aarch64-linux-cuda12, arm64-darwin).
+- `__init__.py` + `pyproject.toml`: version 0.3.6 → 0.3.7.
+
+### Status of each platform binary in this release
+
+- x86_64-linux: production, validated end-to-end on the home-1070
+- aarch64-linux (cuda13/sm_121, GB10): published, **not yet hardware-validated**
+- aarch64-linux-cuda12 (sm_80;90;120): published, **not yet hardware-validated**
+- arm64-darwin: published, **EXPERIMENTAL Mac Metal test build, not validated**
+
+If you're on Mac or aarch64 and want to test, you're now auto-served the
+right binary on next miner restart. If something goes wrong (binary
+fails to run, etc.), the wrapper keeps a `.pre-autoupdate-bak` of the
+previous binary at the same path with that suffix.
+
 ## [0.3.6] — 2026-06-08 (self-updating installer + solver auto-update)
 
 ### Why
