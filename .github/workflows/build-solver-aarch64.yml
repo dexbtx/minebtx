@@ -24,9 +24,9 @@ on:
         required: true
         default: 'v0.32.2'
       cuda_arches:
-        description: 'CUDA archs (semicolon-separated). GB10=120;121. A100=80. H100=90.'
+        description: 'CUDA archs (semicolon-separated). NOTE: sm_121 requires CUDA 13.0+. With cuda_version=12-8 use 80;90;120 (Ampere through Blackwell consumer).'
         required: true
-        default: '80;90;120;121'
+        default: '80;90;120'
       cuda_version:
         description: 'CUDA toolkit version'
         required: true
@@ -105,7 +105,9 @@ jobs:
 
       - name: Configure cmake
         working-directory: btx-src
+        # No `| tail` here — full output, propagating non-zero exit cleanly.
         run: |
+          set -euo pipefail
           mkdir -p build
           cd build
           export CUDACXX=/usr/local/cuda/bin/nvcc
@@ -118,12 +120,13 @@ jobs:
             -DBUILD_GUI=OFF \
             -DBUILD_TESTS=OFF \
             -DBUILD_FUZZ_BINARIES=OFF \
-            -DBUILD_BENCH=OFF 2>&1 | tail -40
+            -DBUILD_BENCH=OFF
 
       - name: Build btx-gbt-solve
         working-directory: btx-src/build
         run: |
-          cmake --build . --target btx-gbt-solve -j $(nproc) 2>&1 | tail -100
+          set -euo pipefail
+          cmake --build . --target btx-gbt-solve -j $(nproc)
 
       - name: Verify binary
         working-directory: btx-src/build
