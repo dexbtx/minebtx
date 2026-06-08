@@ -145,8 +145,60 @@ def _driver_and_cuda() -> tuple[str | None, str | None]:
     return driver, cuda
 
 
+def _apple_chip_brand() -> str:
+    """e.g. 'Apple M4', 'Apple M4 Pro', 'Apple M4 Max'. 'Apple Silicon' fallback."""
+    out = _run(["sysctl", "-n", "machdep.cpu.brand_string"])
+    if out and out.startswith("Apple"):
+        return out.strip()
+    return "Apple Silicon"
+
+
+def _apple_platform_uuid() -> str | None:
+    """Stable, unique-per-machine identifier: IOPlatformUUID (preferred) or
+    the hardware serial. Both come from IOPlatformExpertDevice via ioreg."""
+    out = _run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"])
+    if not out:
+        return None
+    m = re.search(r'"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]+)"', out)
+    if m:
+        return m.group(1).lower()
+    m = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', out)
+    if m:
+        return m.group(1).strip().lower()
+    return None
+
+
+def _apple_gpu_uuid() -> str:
+    """Identity anchor the pool keys the canonical name on — must be UNIQUE
+    per machine and stable across reconnects. Deliberately NOT a generic
+    constant like 'apple-m4-0': that would collide with another miner's
+    already-reserved name (incl. its client suffix) in the pool DB."""
+    slug = re.sub(r"[^a-z0-9]", "", _apple_chip_brand().lower()) or "applesilicon"
+    pid = _apple_platform_uuid() or (_hostname() or "unknown").lower()
+    return f"apple-{slug}-{pid}"
+
+
+def _apple_gpus() -> list[dict[str, Any]]:
+    """Single integrated-GPU entry for Apple Silicon, shaped for the pool's
+    canonical-name rule: `model` drives the name prefix (normalize → uppercase,
+    strip ' GPU'/spaces: 'Apple M4 Pro GPU' → APPLEM4PRO) and `gpu_uuid` is the
+    identity anchor. Without this the miner sends gpus:[] and the dashboard
+    falls back to the raw hostname worker label."""
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        return []
+    return [{
+        "model": f"{_apple_chip_brand()} GPU",
+        "vram_gb": 0,                      # unified memory
+        "compute_capability": "metal_3",
+        "pcie_link": None,
+        "gpu_uuid": _apple_gpu_uuid(),
+    }]
+
+
 def _enumerate_gpus() -> list[dict[str, Any]]:
     """Per-GPU static info: model, vram, compute capability, pcie link, uuid."""
+    if platform.system() == "Darwin":
+        return _apple_gpus()
     rows = _nvidia_query("name,memory.total,compute_cap,pcie.link.gen.current,pcie.link.width.current,uuid")
     gpus = []
     for r in rows:
@@ -523,6 +575,15 @@ def _read_stat() -> tuple[int, ...] | None:
 
 def _gpu_runtime() -> list[dict[str, Any]]:
     """Per-GPU runtime metrics: util%, power_w, temp_c, uuid."""
+    if platform.system() == "Darwin":
+        # Match the static gpu_uuid so the dashboard associates this worker's
+        # GPU. Per-GPU util/power on Apple Silicon needs `powermetrics` (root),
+        # so report the identity with null metrics rather than nothing.
+        gpus = _apple_gpus()
+        if not gpus:
+            return []
+        return [{"gpu_uuid": gpus[0]["gpu_uuid"], "util_pct": None,
+                 "power_w": None, "temp_c": None}]
     rows = _nvidia_query("uuid,utilization.gpu,power.draw,temperature.gpu")
     out = []
     for r in rows:
