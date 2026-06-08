@@ -54,7 +54,12 @@ set -euo pipefail
 # Bump in lockstep with experiments/vast/prebuilds and pyproject.toml.
 PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.2}"
 EXPECTED_SHA256="${EXPECTED_SHA256:-b9251a06133abb90a71d714c3a83ea9accb71ba81352b6226ca50c7e5fae5032}"
+# Darwin arm64 (Apple Silicon + Metal) solver pin. Fill in after the first green
+# build-solver-macos-arm64 CI run (the workflow prints the sha256). Until then,
+# macOS installs intentionally fail rather than install an unverified binary.
+DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-REPLACE_AFTER_FIRST_MACOS_BUILD}"
 PREBUILDS_BASE="${PREBUILDS_BASE:-https://github.com/dexbtx/minebtx/releases/download/${PREBUILDS_TAG}}"
+# Default asset = Linux x86_64; the Darwin branch below overrides for Apple Silicon.
 SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve"
 
 # Default pool — override with --pool flag or DEXBTX_POOL env var.
@@ -110,9 +115,22 @@ confirm() {
 log "DEXBTX miner installer — release ${PREBUILDS_TAG}"
 
 OS="$(uname -s)"
+ARCH="$(uname -m)"
 case "$OS" in
     Linux)  : ;;
-    Darwin) warn "macOS detected. Solver supports Metal backend (M-series only); NVIDIA path will not run." ;;
+    Darwin)
+        # Apple Silicon only — the published Mac build is arm64 + Metal. There is
+        # no Intel (x86_64) macOS solver.
+        if [[ "$ARCH" != "arm64" ]]; then
+            err "macOS Intel (x86_64) is not supported — Apple Silicon (arm64) only."
+        fi
+        log "macOS Apple Silicon detected — using the Metal solver build (no NVIDIA path)."
+        SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve-darwin-arm64"
+        EXPECTED_SHA256="${DARWIN_ARM64_SHA256}"
+        if [[ "$EXPECTED_SHA256" == "REPLACE_AFTER_FIRST_MACOS_BUILD" ]]; then
+            err "macOS solver SHA pin not set yet. Run the build-solver-macos-arm64 workflow, publish the asset, then set DARWIN_ARM64_SHA256 (in install.sh or via env)."
+        fi
+        ;;
     *)      err "unsupported OS: $OS" ;;
 esac
 
@@ -132,7 +150,14 @@ fi
 
 # Python
 need curl
-need sha256sum
+# SHA-256 helper — Linux has sha256sum; macOS ships shasum instead.
+if command -v sha256sum >/dev/null 2>&1; then
+    sha256_of() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+    sha256_of() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+    err "no SHA-256 tool found (need sha256sum or shasum)"
+fi
 
 PYTHON=""
 for cand in python3.11 python3.10 python3; do
@@ -207,7 +232,7 @@ else
     curl -fsSL "$SOLVER_URL" -o "$TMP"
 fi
 
-ACTUAL_SHA="$(sha256sum "$TMP" | awk '{print $1}')"
+ACTUAL_SHA="$(sha256_of "$TMP")"
 if [[ "$ACTUAL_SHA" != "$EXPECTED_SHA256" ]]; then
     err "solver SHA256 mismatch — expected $EXPECTED_SHA256, got $ACTUAL_SHA. Aborting (refusing to install untrusted binary)."
 fi
