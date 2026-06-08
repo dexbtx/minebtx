@@ -23,7 +23,7 @@
 # ─── Self-update bootstrap ──────────────────────────────────────────────────
 # Marker — keep this exact line + bump on each release. The bootstrap
 # downstream parses this string and skips re-exec if it matches.
-INSTALL_SH_VERSION="0.3.7"
+INSTALL_SH_VERSION="0.3.8"
 
 INSTALL_SH_LATEST_URL="https://github.com/dexbtx/minebtx/raw/main/install.sh"
 
@@ -194,6 +194,9 @@ if [[ -z "$PYTHON" ]]; then
     fi
 fi
 log "using Python: $($PYTHON --version 2>&1)"
+# Where `pip install --user` drops console scripts (Linux: ~/.local/bin;
+# macOS: ~/Library/Python/X.Y/bin). Used for the PATH hint + launch command.
+USER_BIN="$("$PYTHON" -m site --user-base 2>/dev/null)/bin"
 
 # ─── Install pip + runtime deps + dexbtx-miner ──────────────────────────────
 # Many vast.ai CUDA images ship without pip — install it via apt if missing.
@@ -245,10 +248,10 @@ else
     log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
     pip_install --upgrade "$DEXBTX_MINER_PKG_URL"
 
-    # Make sure ~/.local/bin is on PATH for the next session
+    # Make sure the pip --user bin dir is on PATH for the next session.
     case ":$PATH:" in
-        *":$HOME/.local/bin:"*) : ;;
-        *) warn "add to your shell rc: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+        *":$USER_BIN:"*) : ;;
+        *) warn "dexbtx-miner was installed to $USER_BIN (not on PATH). Add to your shell rc: export PATH=\"$USER_BIN:\$PATH\"" ;;
     esac
 fi
 
@@ -301,6 +304,17 @@ if [[ -z "$WORKER" ]]; then
     WORKER="$(hostname -s 2>/dev/null || echo default)"
 fi
 
+# Solver backend default from platform: Metal on Apple Silicon (verified
+# bit-equivalent to the CUDA/CPU kernel in CI), CUDA if an NVIDIA GPU is
+# present, else CPU. Users can override in the config.
+if [[ "$OS" == "Darwin" ]]; then
+    SOLVER_BACKEND="metal"
+elif [[ "$HAS_NVIDIA" -eq 1 ]]; then
+    SOLVER_BACKEND="cuda"
+else
+    SOLVER_BACKEND="cpu"
+fi
+
 # Write config (preserve existing fields if file exists)
 if [[ -f "$CONFIG_PATH" ]]; then
     log "config exists at $CONFIG_PATH — preserving (override with --yes to regenerate)"
@@ -337,7 +351,7 @@ worker_name: "${WORKER}"
 gbt_solve_path: "${SOLVER_PATH}"
 
 # Solver tuning (per-GPU profile chosen from detected hardware: ${GPU_NAME:-CPU only})
-solver_backend: "cuda"
+solver_backend: "${SOLVER_BACKEND}"
 solver_threads: 4
 solver_batch_size: ${GPU_BATCH}        # BTX_MATMUL_SOLVE_BATCH_SIZE
 solver_prefetch_depth: ${GPU_PREFETCH} # BTX_MATMUL_PREPARE_PREFETCH_DEPTH
@@ -387,6 +401,15 @@ if [[ "$HAS_NVIDIA" -eq 1 ]]; then
 fi
 
 # ─── Summary ────────────────────────────────────────────────────────────────
+# Resolve the launch command: bare name if it's on PATH, otherwise the full
+# pip --user path so the printed command actually works (esp. on macOS where
+# ~/Library/Python/X.Y/bin is rarely on PATH).
+if command -v dexbtx-miner >/dev/null 2>&1; then
+    MINER_CMD="dexbtx-miner"
+else
+    MINER_CMD="${USER_BIN}/dexbtx-miner"
+fi
+
 echo
 log "✓ DEXBTX miner installed."
 echo
@@ -394,19 +417,19 @@ echo "  Pool:     ${POOL}"
 echo "  Address:  ${ADDRESS:-<edit ${CONFIG_PATH} and set payout_address>}"
 echo "  Worker:   ${WORKER}"
 echo "  GPU:      ${GPU_NAME:-CPU only}"
+echo "  Backend:  ${SOLVER_BACKEND}"
 echo
 echo "Launch the miner:"
-echo "  dexbtx-miner --config ${CONFIG_PATH}"
+echo "  ${MINER_CMD} --config ${CONFIG_PATH}"
 echo
 echo "Or, for a long-running daemon (recommended):"
-echo "  tmux new -d -s dexbtx 'dexbtx-miner --config ${CONFIG_PATH} 2>&1 | tee -a ${INSTALL_DIR}/miner.log'"
+echo "  tmux new -d -s dexbtx '${MINER_CMD} --config ${CONFIG_PATH} 2>&1 | tee -a ${INSTALL_DIR}/miner.log'"
 echo "  tmux attach -t dexbtx"
 echo
 echo "Stats + payouts via Telegram: @btxdexbot   /stats /mybalance /help"
 echo
-echo "Tune for your specific GPU (the defaults are a starting point — every"
-echo "card has a different sweet spot):"
-echo "  dexbtx-miner benchmark                  # 2-min sweep across common batch sizes"
-echo "  dexbtx-miner benchmark --write-config   # write the winning config"
+echo "Tune for your specific hardware (the defaults are a starting point):"
+echo "  ${MINER_CMD} benchmark                  # 2-min sweep across common batch sizes"
+echo "  ${MINER_CMD} benchmark --write-config   # write the winning config"
 echo "See TUNING.md for the env-var reference + per-GPU rough guidelines."
 echo

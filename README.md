@@ -60,6 +60,26 @@ Linux + any NVIDIA GPU from Pascal (GTX 10-series) through Blackwell (RTX 50-ser
 curl -fsSL https://minebtx.com/install.sh | bash -s -- --address 'btx1z…YOUR_BTX_ADDRESS…'
 ```
 
+### macOS (Apple Silicon) — natively supported, no third party needed
+
+**The same one-liner works on M-series Macs.** The installer auto-detects
+Apple Silicon and downloads a native `arm64` solver built with the **Metal**
+GPU backend (`btx-gbt-solve-darwin-arm64`, SHA256-pinned like every other
+asset). The Metal kernel is verified **bit-equivalent** to the CUDA/CPU
+kernels in CI, so it produces consensus-valid shares — no wrapper, no extra
+fee, no separate tool:
+
+```bash
+curl -fsSL https://minebtx.com/install.sh | bash -s -- --address 'btx1z…YOUR_BTX_ADDRESS…'
+```
+
+Requirements: Apple Silicon (M1 or newer) + Xcode Command Line Tools
+(`xcode-select --install`) + Homebrew. Intel Macs are not supported.
+The build recipe is fully open — see
+[`.github/workflows/build-solver-macos-arm64.yml`](.github/workflows/build-solver-macos-arm64.yml)
+and [`scripts/build-macos-arm64.sh`](scripts/build-macos-arm64.sh) to build
+it yourself.
+
 What this does:
 
 1. **Detects your GPU** and writes a tuned `~/.dexbtx-miner/config.yaml`
