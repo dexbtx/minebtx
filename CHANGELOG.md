@@ -4,6 +4,66 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.6] — 2026-06-08 (self-updating installer + solver auto-update)
+
+### Why
+Two classes of "stale on miners' disks" problems we keep running into:
+
+1. **Stale `install.sh`** — operators have an older install.sh saved or
+   are hitting a cached CDN copy. It pins to an older release tag whose
+   binary fails the share-target smoke check. Two operators hit this
+   today.
+2. **Stale solver binary** — a long-running rig keeps the same binary
+   forever even when we ship a new one. Forks require chasing operators
+   down via Telegram.
+
+This release future-proofs both, going forward.
+
+### How
+
+- **install.sh self-update bootstrap.** Before doing anything else, it
+  re-fetches itself from `github.com/dexbtx/minebtx/raw/main/install.sh`,
+  compares the embedded `INSTALL_SH_VERSION`, and re-execs the newer
+  copy if outdated. Opt-out: `DEXBTX_NO_SELFUPDATE=1`. Fails open if
+  GitHub raw is unreachable.
+
+- **Solver auto-update via manifest.** On every miner startup, the
+  Python wrapper fetches `.solver-channel.json` from the repo root,
+  compares the local binary's SHA256 against the manifest's, and
+  atomically replaces it (with backup) if outdated. Opt-out:
+  `DEXBTX_NO_SOLVER_AUTOUPDATE=1`. Same fail-open behavior — a network
+  blip never blocks mining.
+
+- **Fork-mandatory upgrade lever.** The manifest supports a
+  `min_required_sha256` field. When set, miners whose local SHA differs
+  AND can't successfully upgrade refuse to mine (raising
+  `SolverUpdateRequired`). This is the lever for forks: publish the
+  binary, set `min_required_sha256`, and every miner's next process
+  spawn either upgrades or refuses — no Telegram chase required.
+
+### What changed
+
+- New file: `src/dexbtx_miner/solver_updater.py` (manifest fetch +
+  SHA-pinned download + atomic install + opt-out + hard-floor enforcement).
+- Wired into `src/dexbtx_miner/__main__.py` startup before
+  `StratumClient.run_forever()`.
+- `install.sh` gains a ~25-line bootstrap block at the top.
+- New file: `.solver-channel.json` at repo root, points at the current
+  v0.3.5.2-era binary (no functional change — same binary, just now
+  reachable via the manifest mechanism).
+- `__init__.py` version → 0.3.6, `pyproject.toml` version → 0.3.6.
+
+### Action for operators
+
+Re-run install.sh once via the raw-GitHub URL to pick up the bootstrap:
+
+```
+curl -fsSL https://github.com/dexbtx/minebtx/raw/main/install.sh | bash
+```
+
+From then on, both the installer and the solver binary self-update on
+every run. No further manual intervention required at future fork events.
+
 ## [0.3.5.2] — 2026-06-08 (fixup: LTO build flag)
 
 ### Why

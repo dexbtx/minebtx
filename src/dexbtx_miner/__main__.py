@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from .config import MinerConfig, load_yaml_config
+from .solver_updater import SolverUpdateRequired, maybe_update_solver
 from .stratum_client import StratumClient
 
 log = logging.getLogger(__name__)
@@ -116,6 +117,17 @@ async def _run(cfg: MinerConfig) -> int:
     log.info("  solver=%s threads=%s batch=%s gpu_inputs=%s",
              cfg.gbt_solve_path, cfg.solver_threads,
              cfg.solver_batch_size, cfg.gpu_inputs)
+
+    # Auto-update the solver binary against the published manifest before
+    # we spawn it. Routine errors fail open (mining continues with current
+    # local binary). A `min_required_sha256` mismatch that we can't satisfy
+    # raises SolverUpdateRequired and we refuse to start — this is the
+    # lever for fork-mandatory upgrades.
+    try:
+        maybe_update_solver(cfg.gbt_solve_path)
+    except SolverUpdateRequired as e:
+        log.error("MANDATORY solver upgrade unsatisfied: %s", e)
+        return 1
 
     client = StratumClient(cfg)
     try:

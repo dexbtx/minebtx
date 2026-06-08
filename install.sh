@@ -6,6 +6,8 @@
 #   curl -fsSL https://minebtx.com/install.sh | bash -s -- --address btx1z...
 #
 # What this script does:
+#   0. Self-update: re-fetch the latest install.sh from the repo and re-exec
+#      if our local copy is older. Skip with DEXBTX_NO_SELFUPDATE=1.
 #   1. Detect OS + GPU (NVIDIA via nvidia-smi; otherwise CPU-only path)
 #   2. Install Python 3.10+ if missing
 #   3. Install dexbtx-miner via pip
@@ -17,6 +19,33 @@
 #
 # This script is idempotent — re-running upgrades to the latest stable
 # version. Existing config is preserved.
+
+# ─── Self-update bootstrap ──────────────────────────────────────────────────
+# Marker — keep this exact line + bump on each release. The bootstrap
+# downstream parses this string and skips re-exec if it matches.
+INSTALL_SH_VERSION="0.3.6"
+
+INSTALL_SH_LATEST_URL="https://github.com/dexbtx/minebtx/raw/main/install.sh"
+
+if [[ "${DEXBTX_NO_SELFUPDATE:-0}" != "1" ]]; then
+    _bootstrap_tmp="$(mktemp /tmp/dexbtx-install-sh.XXXXXX 2>/dev/null || mktemp)"
+    if [[ -n "$_bootstrap_tmp" ]] && \
+        curl -fsSL --connect-timeout 5 --max-time 30 \
+            "$INSTALL_SH_LATEST_URL" -o "$_bootstrap_tmp" 2>/dev/null; then
+        _latest_ver="$(grep -E '^INSTALL_SH_VERSION=' "$_bootstrap_tmp" \
+            | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'")"
+        if [[ -n "$_latest_ver" && "$_latest_ver" != "$INSTALL_SH_VERSION" ]]; then
+            echo "[install] self-updating $INSTALL_SH_VERSION -> $_latest_ver"
+            chmod +x "$_bootstrap_tmp"
+            DEXBTX_NO_SELFUPDATE=1 exec bash "$_bootstrap_tmp" "$@"
+        fi
+        rm -f "$_bootstrap_tmp"
+    else
+        # GitHub raw unreachable; warn but continue with the local copy.
+        echo "[install] (self-update check skipped: $INSTALL_SH_LATEST_URL unreachable)" >&2
+    fi
+fi
+unset _bootstrap_tmp _latest_ver
 
 set -euo pipefail
 

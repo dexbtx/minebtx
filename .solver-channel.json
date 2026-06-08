@@ -1,0 +1,10 @@
+{
+  "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. Bump version + sha256 + url whenever a new btx-gbt-solve is published. Set min_required_sha256 to enforce a hard floor at fork boundaries — miners on a different SHA will refuse to mine until they upgrade (unless DEXBTX_NO_SOLVER_AUTOUPDATE=1).",
+  "version": "0.3.5.2",
+  "sha256": "b9251a06133abb90a71d714c3a83ea9accb71ba81352b6226ca50c7e5fae5032",
+  "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve",
+  "min_required_sha256": null,
+  "force_upgrade_reason": null,
+  "released_at": "2026-06-08",
+  "notes": "LTO-enabled rebuild against BTX v0.32.2 source. Restores share_target_override, activates nMatMulNonceSeedHeight=125000. ~3-5x throughput vs the initial non-LTO v0.32.2 build."
+}
