@@ -1,0 +1,128 @@
+--- a/src/pow.cpp	2026-06-08 11:52:12.998920307 -0700
++++ b/src/pow.cpp	2026-06-08 06:24:55.212343700 -0700
+@@ -2626,7 +2626,8 @@
+                             uint64_t& max_tries,
+                             int32_t block_height,
+                             const std::atomic<bool>* abort_flag,
+-                            std::vector<uint32_t>* freivalds_payload_out)
++                            std::vector<uint32_t>* freivalds_payload_out,
++                            const uint256* share_target_override)
+ {
+     if (freivalds_payload_out != nullptr) {
+         freivalds_payload_out->clear();
+@@ -2635,6 +2636,15 @@
+     auto bnTarget{DeriveTarget(block.nBits, params.powLimit)};
+     if (!bnTarget) return false;
+ 
++    // POOL-MINING SUPPORT: caller may override the comparison target so the
++    // solver returns early on share-tier hits. header.nBits (and thus the
++    // matmul digest) stays at consensus block bits; only the digest <= target
++    // early-exit comparison uses the override.
++    if (share_target_override != nullptr) {
++        bnTarget = UintToArith256(*share_target_override);
++        if (*bnTarget == 0) return false;
++    }
++
+     const auto solve_start = std::chrono::steady_clock::now();
+     // Pipeline diagnostic stats are set by the top-level SolveMatMul dispatch (which knows whether
+     // this run is parallel). A worker chunk must NOT overwrite them, so they are not touched here.
+@@ -2849,7 +2859,8 @@
+                          int32_t block_height,
+                          const std::atomic<bool>* abort_flag,
+                          std::vector<uint32_t>* freivalds_payload_out,
+-                         uint32_t solver_threads)
++                         uint32_t solver_threads,
++                         const uint256* share_target_override = nullptr)
+ {
+     if (freivalds_payload_out != nullptr) {
+         freivalds_payload_out->clear();
+@@ -2923,7 +2934,8 @@
+                 local_tries,
+                 block_height,
+                 &shared_abort,
+-                freivalds_payload_out != nullptr ? &local_payload : nullptr);
++                freivalds_payload_out != nullptr ? &local_payload : nullptr,
++                share_target_override);
+             tries_consumed.fetch_add(chunk_tries - local_tries, std::memory_order_relaxed);
+ 
+             if (!local_solved) {
+@@ -2978,7 +2990,8 @@
+ bool SolveMatMul(CBlockHeader& block, const Consensus::Params& params, uint64_t& max_tries,
+                  int32_t block_height,
+                  const std::atomic<bool>* abort_flag,
+-                 std::vector<uint32_t>* freivalds_payload_out)
++                 std::vector<uint32_t>* freivalds_payload_out,
++                 const uint256* share_target_override)
+ {
+     if (!params.fMatMulPOW) return false;
+     if (freivalds_payload_out != nullptr) {
+@@ -3002,6 +3015,22 @@
+ 
+     auto bnTarget{DeriveTarget(block.nBits, params.powLimit)};
+     if (!bnTarget) return false;
++    // Preserve the BLOCK-tier target before any share-tier override. The
++    // pre-hash lottery (sigma <= target << epsilon_bits) is a CONSENSUS
++    // check applied against the block-tier target derived from header.nBits,
++    // regardless of any share-tier override the caller passes for digest
++    // early-exit. Conflating them causes pool-mined shares to pass share-tier
++    // pre_hash but fail block-tier pre_hash at submitblock.
++    const arith_uint256 block_bnTarget = *bnTarget;
++    // POOL-MINING SUPPORT: caller may override the comparison target so the
++    // solver returns early on share-tier hits. The matmul digest is still
++    // computed against header.nBits; only the early-exit comparison switches
++    // to share_target. The V2 path forwards share_target_override to
++    // SolveMatMulNonceSeeded which applies the same override.
++    if (share_target_override != nullptr) {
++        bnTarget = UintToArith256(*share_target_override);
++        if (*bnTarget == 0) return false;
++    }
+     if (params.IsMatMulNonceSeedActive(block_height)) {
+         // V2 nonce-seeded solving parallelizes across cores exactly like the legacy solver. When
+         // warranted (and not already inside a parallel worker), fan the nonce range out via
+@@ -3032,7 +3061,7 @@
+             if (parallel_solver_enabled) {
+                 return SolveMatMulParallel(
+                     block, params, max_tries, block_height, abort_flag,
+-                    freivalds_payload_out, solver_threads);
++                    freivalds_payload_out, solver_threads, share_target_override);
+             }
+         }
+         return SolveMatMulNonceSeeded(
+@@ -3041,7 +3070,8 @@
+             max_tries,
+             block_height,
+             abort_flag,
+-            freivalds_payload_out);
++            freivalds_payload_out,
++            share_target_override);
+     }
+ 
+     const uint32_t n = block.matmul_dim;
+@@ -3072,7 +3102,8 @@
+             block_height,
+             abort_flag,
+             freivalds_payload_out,
+-            solver_threads);
++            solver_threads,
++            share_target_override);
+     }
+ 
+     const bool mem_diag_enabled = []() {
+@@ -3216,7 +3247,7 @@
+                     cursor_remaining_max_tries,
+                     configured_batch_size,
+                     pre_hash_epsilon_bits,
+-                    *bnTarget,
++                    block_bnTarget,
+                     cursor_attempts_since_refresh,
+                     header_time_refresh_interval,
+                     params.fPowAllowMinDifficultyBlocks),
+@@ -3271,7 +3302,7 @@
+                 max_tries,
+                 configured_batch_size,
+                 pre_hash_epsilon_bits,
+-                *bnTarget,
++                block_bnTarget,
+                 attempts_since_time_refresh,
+                 header_time_refresh_interval,
+                 params.fPowAllowMinDifficultyBlocks);

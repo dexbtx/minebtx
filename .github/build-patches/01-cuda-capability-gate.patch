@@ -1,0 +1,15 @@
+--- a/src/cuda/cuda_context.cpp	2026-06-08 11:52:12.970920148 -0700
++++ b/src/cuda/cuda_context.cpp	2026-06-08 06:41:21.839382900 -0700
+@@ -20,7 +20,11 @@
+ namespace btx::cuda {
+ namespace {
+ 
+-constexpr int MIN_SUPPORTED_COMPUTE_CAPABILITY_MAJOR{8};
++// Upstream v0.32.2 set this to 8 (Ampere+). We lower to 6 to keep Pascal
++// (sm_61, GTX 10-series) and Turing (sm_75, RTX 20-series / T4) CUDA-capable
++// — v0.30.1 ran fine on these so the kernel correctness has working precedent.
++// Validated by GPU-vs-CPU digest equivalence on the GTX 1070 before publishing.
++constexpr int MIN_SUPPORTED_COMPUTE_CAPABILITY_MAJOR{6};
+ 
+ std::string ComputeCapabilityString(int major, int minor)
+ {

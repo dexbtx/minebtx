@@ -1,0 +1,12 @@
+--- a/src/pow.h	2026-06-08 11:52:12.998920307 -0700
++++ b/src/pow.h	2026-06-08 05:37:42.063320900 -0700
+@@ -224,7 +224,8 @@
+ bool SolveMatMul(CBlockHeader& block, const Consensus::Params& params, uint64_t& max_tries,
+                  int32_t block_height = -1,
+                  const std::atomic<bool>* abort_flag = nullptr,
+-                 std::vector<uint32_t>* freivalds_payload_out = nullptr);
++                 std::vector<uint32_t>* freivalds_payload_out = nullptr,
++                 const uint256* share_target_override = nullptr);
+ bool CheckKAWPOWProofOfWork(const CBlockHeader& block, uint32_t block_height, const Consensus::Params&);
+ bool SolveKAWPOW(CBlockHeader& block, uint32_t block_height, const Consensus::Params& params, uint64_t& max_tries);
+ 
