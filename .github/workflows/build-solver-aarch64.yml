@@ -119,8 +119,9 @@ jobs:
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_GUI=OFF \
             -DBUILD_TESTS=OFF \
-            -DBUILD_FUZZ_BINARIES=OFF \
-            -DBUILD_BENCH=OFF
+            -DBUILD_BENCH=OFF \
+            -DBUILD_FUZZ_BINARY=OFF \
+            -DBUILD_UTIL=ON
 
       - name: Build btx-gbt-solve
         working-directory: btx-src/build
