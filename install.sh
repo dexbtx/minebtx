@@ -57,7 +57,7 @@ EXPECTED_SHA256="${EXPECTED_SHA256:-b9251a06133abb90a71d714c3a83ea9accb71ba81352
 # Darwin arm64 (Apple Silicon + Metal) solver pin. Fill in after the first green
 # build-solver-macos-arm64 CI run (the workflow prints the sha256). Until then,
 # macOS installs intentionally fail rather than install an unverified binary.
-DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-REPLACE_AFTER_FIRST_MACOS_BUILD}"
+DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-6d773b8b4e74d5b538102c24f67503004c407d555d0201636632d93a05f6516a}"
 PREBUILDS_BASE="${PREBUILDS_BASE:-https://github.com/dexbtx/minebtx/releases/download/${PREBUILDS_TAG}}"
 # Default asset = Linux x86_64; the Darwin branch below overrides for Apple Silicon.
 SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve"
