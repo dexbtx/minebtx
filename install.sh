@@ -23,7 +23,7 @@
 # ─── Self-update bootstrap ──────────────────────────────────────────────────
 # Marker — keep this exact line + bump on each release. The bootstrap
 # downstream parses this string and skips re-exec if it matches.
-INSTALL_SH_VERSION="0.3.9"
+INSTALL_SH_VERSION="0.3.10"
 
 INSTALL_SH_LATEST_URL="https://github.com/dexbtx/minebtx/raw/main/install.sh"
 
@@ -244,7 +244,7 @@ else
     # GitHub keeps the install pinned to a specific release commit and
     # avoids a third-party package surface. Override DEXBTX_MINER_PKG_URL
     # to install from a fork or a different ref.
-    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.3.4.tar.gz}"
+    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.3.8.tar.gz}"
     log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
     pip_install --upgrade "$DEXBTX_MINER_PKG_URL"
 
