@@ -69,22 +69,57 @@ else()
 endif()"""
 
 
-def main() -> int:
-    p = Path(sys.argv[1] if len(sys.argv) > 1 else "src/CMakeLists.txt")
+# GCC-only hardening flags that clang/hipcc rejects (CUDA/nvcc tolerates them).
+# We skip them for HIP builds — guarded by the -D cache var which is set on the
+# cmake command line, so it's defined before these top-level lines run.
+GCC_ONLY_FLAG_LINES = [
+    'try_append_cxx_flags("-fno-extended-identifiers" TARGET core_interface SKIP_LINK)',
+    'try_append_cxx_flags("-fstack-reuse=none" TARGET core_interface)',
+]
+
+
+def _patch_src_cmake(p: Path) -> None:
     txt = p.read_text()
     if "BTX_ENABLE_HIP_EXPERIMENTAL" in txt:
-        print("HIP wiring already present — nothing to do.")
-        return 0
+        print(f"{p}: HIP backend wiring already present.")
+        return
     if ADD_LIB_ANCHOR not in txt:
-        print(f"ERROR: anchor not found: {ADD_LIB_ANCHOR}", file=sys.stderr)
-        return 1
+        raise SystemExit(f"ERROR: anchor not found in {p}: {ADD_LIB_ANCHOR}")
     if CUDA_STUB_BLOCK not in txt:
-        print("ERROR: cuda stub-else block not found (upstream layout changed)", file=sys.stderr)
-        return 1
+        raise SystemExit(f"ERROR: cuda stub-else block not found in {p}")
     txt = txt.replace(ADD_LIB_ANCHOR, HIP_OPTION_BLOCK + "\n" + ADD_LIB_ANCHOR, 1)
     txt = txt.replace(CUDA_STUB_BLOCK, HIP_BRANCH, 1)
     p.write_text(txt)
-    print("Injected HIP option block + elseif(BTX_ENABLE_HIP_EXPERIMENTAL) branch.")
+    print(f"{p}: injected HIP option block + elseif(BTX_ENABLE_HIP_EXPERIMENTAL) branch.")
+
+
+def _patch_top_cmake(p: Path) -> None:
+    """Guard GCC-only hardening flags so they don't reach the HIP/clang compile."""
+    txt = p.read_text()
+    changed = 0
+    for line in GCC_ONLY_FLAG_LINES:
+        if line not in txt:
+            print(f"WARN: GCC-only flag line not found (upstream drift?): {line}")
+            continue
+        guarded = f"if(NOT BTX_ENABLE_HIP_EXPERIMENTAL)\n  {line}\nendif()"
+        if guarded in txt:
+            continue
+        txt = txt.replace(line, guarded, 1)
+        changed += 1
+    if changed:
+        p.write_text(txt)
+    print(f"{p}: guarded {changed} GCC-only flag(s) for non-HIP builds.")
+
+
+def main() -> int:
+    # Accept either a repo root or the src/CMakeLists.txt path (back-compat).
+    arg = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+    if arg.name == "CMakeLists.txt":
+        root = arg.parent.parent if arg.parent.name == "src" else arg.parent
+    else:
+        root = arg
+    _patch_src_cmake(root / "src" / "CMakeLists.txt")
+    _patch_top_cmake(root / "CMakeLists.txt")
     return 0
 
 
