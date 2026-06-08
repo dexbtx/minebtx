@@ -23,7 +23,7 @@
 # ─── Self-update bootstrap ──────────────────────────────────────────────────
 # Marker — keep this exact line + bump on each release. The bootstrap
 # downstream parses this string and skips re-exec if it matches.
-INSTALL_SH_VERSION="0.3.12"
+INSTALL_SH_VERSION="0.3.13"
 
 INSTALL_SH_LATEST_URL="https://github.com/dexbtx/minebtx/raw/main/install.sh"
 
@@ -61,7 +61,7 @@ DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-6d773b8b4e74d5b538102c24f67503004c40
 # Linux aarch64 (Grace / GB10 Blackwell etc.) CUDA solver pins. Default CUDA
 # toolkit variant is cuda12; set DEXBTX_CUDA=cuda13 for newer-driver hosts.
 AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-a69357152702a75a6e96fadfe4aed5c7e34e704754fe4053a4bf0c2998626819}"
-AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-1ce59bf6b6a0f720973f75627ec7f8d5bd2f776c3151b54053a56dbd8b3efd18}"
+AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-ca63e161c78c7dd8fe6ba2d302a119424fe23813c8e332b1b05a71e938feb5c1}"
 PREBUILDS_BASE="${PREBUILDS_BASE:-https://github.com/dexbtx/minebtx/releases/download/${PREBUILDS_TAG}}"
 # Default asset = Linux x86_64; the Darwin branch below overrides for Apple Silicon.
 SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve"
