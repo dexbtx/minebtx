@@ -4,6 +4,54 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.5] — 2026-06-08 (MANDATORY: BTX v0.32.2 / matmul nonce-seed v2 at height 125,000)
+
+### Why
+BTX v0.32.1 / v0.32.2 introduces a consensus-mandated change at block 125,000:
+the matmul A/B seeds are now derived per-nonce from the mutable header
+(`DeterministicMatMulSeedV2`) instead of once per block. This is the
+"E1 hardening" the chain devs called out as an explicit counter-measure
+against cached-`A·B` precompute. Miners that don't re-derive seeds per
+nonce will produce digests that the pool (and the chain) reject after
+activation.
+
+Activation block 125,000 — at the current network cadence, ~7h after
+this release. **This is a mandatory upgrade for any miner that wants to
+keep submitting shares past block 125,000.**
+
+### Solver
+- **btx-gbt-solve rebuilt against BTX v0.32.2 source.** Tag
+  `btx-prebuilds-v0.32.2`, SHA256
+  `86fd2f6de99cf735129fa1cb0f71078901bf22a34d21a682c547ab5eccd47a81`.
+- Activates `nMatMulNonceSeedHeight = 125000` in the in-process consensus
+  so `SolveMatMul` routes through `SolveMatMulNonceSeeded` post-fork.
+  Each per-nonce attempt re-derives `seed_a` / `seed_b` from the
+  (mutable) header before computing `A` and `B`.
+- Restores `share_target_override` to v0.32.2's `pow.cpp` (the upstream
+  release removed it). Preserves the block-derived `bnTarget` in a
+  separate variable so pre-hash consensus gating still uses block-tier
+  target while digest early-exit uses share-tier — same fix shipped in
+  v0.3.0, ported forward.
+
+### Installer
+- `install.sh` bumps `PREBUILDS_TAG` → `btx-prebuilds-v0.32.2`,
+  `EXPECTED_SHA256` → new binary hash.
+- `pyproject.toml`: `tool.dexbtx-miner.solver.prebuilds_release` and
+  `expected_sha256` follow.
+
+### How to upgrade
+Re-run the installer; it's idempotent and preserves config:
+
+```
+curl -fsSL https://minebtx.com/install.sh | bash
+```
+
+Or pinned URL (bypasses any cache):
+
+```
+curl -fsSL https://github.com/dexbtx/minebtx/raw/main/install.sh | bash
+```
+
 ## [0.3.1] — 2026-05-28 (install.sh hotfix — non-mandatory for existing miners)
 
 ### Fixed
