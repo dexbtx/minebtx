@@ -4,6 +4,37 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.5.1] — 2026-06-08 (fixup: GPU-enabled binary)
+
+### Why
+The initial 0.3.5 push shipped a `btx-gbt-solve` binary that was built without
+CUDA experimental enabled — `--backend cuda` silently fell back to CPU on every
+machine, collapsing hashrate ~100×. Fixed by rebuilding with
+`-DBTX_ENABLE_CUDA_EXPERIMENTAL=ON -DBTX_CUDA_ARCHITECTURES="61;75;86;89;90;120"`
+plus a one-line patch lowering `MIN_SUPPORTED_COMPUTE_CAPABILITY_MAJOR` from
+upstream's `8` (Ampere+) to `6` — restores Pascal (sm_61, 10-series) and Turing
+(sm_75, 20-series/T4) support that upstream dropped in v0.32.2.
+
+### Verification before re-publishing
+- C++ V2 seed derivation byte-matches Python reference (also matches the pool's
+  Rust port by transitivity)
+- GPU vs CPU digest equivalence on GTX 1070 (Pascal): identical digest at the
+  same nonce on the V2 path (h=125001)
+- New v0.32.2 GPU digest matches OLD v6.0 GPU digest at the same nonce on the
+  legacy path (pre-125k)
+- All 6 CUDA archs (sm_61, sm_75, sm_86, sm_89, sm_90, sm_120) embedded
+- Live `--backend cuda` smoke draws 40W on the 1070 (idle baseline ~8W)
+
+### Asset
+- `btx-gbt-solve` Linux x86_64 — `sha256: 5a5938731dbb02337770d7dce34a576a8f90ca67919c295d72509a83c2c7ba8f`
+
+### Action for existing miners
+Re-run the installer; it's idempotent and preserves config:
+
+```
+curl -fsSL https://minebtx.com/install.sh | bash
+```
+
 ## [0.3.5] — 2026-06-08 (MANDATORY: BTX v0.32.2 / matmul nonce-seed v2 at height 125,000)
 
 ### Why
