@@ -117,6 +117,7 @@ jobs:
           set -euo pipefail
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_HARDENING=OFF \
             -DBTX_ENABLE_HIP_EXPERIMENTAL=ON \
             -DBTX_HIP_ARCHITECTURES="${{ inputs.gfx_arches }}" \
             -DCMAKE_HIP_ARCHITECTURES="${{ inputs.gfx_arches }}" \
