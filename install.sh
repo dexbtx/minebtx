@@ -23,7 +23,7 @@
 # ─── Self-update bootstrap ──────────────────────────────────────────────────
 # Marker — keep this exact line + bump on each release. The bootstrap
 # downstream parses this string and skips re-exec if it matches.
-INSTALL_SH_VERSION="0.3.6"
+INSTALL_SH_VERSION="0.3.7"
 
 INSTALL_SH_LATEST_URL="https://github.com/dexbtx/minebtx/raw/main/install.sh"
 
@@ -137,15 +137,22 @@ esac
 # GPU detection
 HAS_NVIDIA=0
 GPU_NAME=""
-if command -v nvidia-smi >/dev/null 2>&1; then
-    if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | grep -q "."; then
-        HAS_NVIDIA=1
-        GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
-        log "detected NVIDIA GPU: ${GPU_NAME}"
+if [[ "$OS" == "Darwin" ]]; then
+    # Apple Silicon uses the Metal backend. The NVIDIA / CPU-fallback check
+    # below is Linux-only — running it on macOS would wrongly warn "CPU only"
+    # for what is actually a Metal-accelerated build.
+    GPU_NAME="Apple Silicon (Metal)"
+else
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | grep -q "."; then
+            HAS_NVIDIA=1
+            GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+            log "detected NVIDIA GPU: ${GPU_NAME}"
+        fi
     fi
-fi
-if [[ "$HAS_NVIDIA" -eq 0 ]]; then
-    warn "no NVIDIA GPU detected — solver will run on CPU only (much slower)"
+    if [[ "$HAS_NVIDIA" -eq 0 ]]; then
+        warn "no NVIDIA GPU detected — solver will run on CPU only (much slower)"
+    fi
 fi
 
 # Python
@@ -171,13 +178,19 @@ for cand in python3.11 python3.10 python3; do
 done
 
 if [[ -z "$PYTHON" ]]; then
-    log "installing python3.11 via apt..."
-    if command -v apt-get >/dev/null 2>&1; then
+    if [[ "$OS" == "Darwin" ]]; then
+        command -v brew >/dev/null 2>&1 || err "no python3.10+ found and Homebrew missing — install Python 3.10+ (see https://brew.sh, then 'brew install python') and re-run"
+        log "installing python@3.11 via brew..."
+        brew install python@3.11 || err "brew install python@3.11 failed"
+        PYTHON="$(brew --prefix)/opt/python@3.11/bin/python3.11"
+        command -v "$PYTHON" >/dev/null 2>&1 || PYTHON=python3.11
+    elif command -v apt-get >/dev/null 2>&1; then
+        log "installing python3.11 via apt..."
         sudo apt-get update -qq
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.11 python3.11-venv python3-pip
         PYTHON=python3.11
     else
-        err "no python3.10+ found and apt-get not available — install Python 3.10+ manually then re-run"
+        err "no python3.10+ found and no supported package manager (apt/brew) — install Python 3.10+ manually then re-run"
     fi
 fi
 log "using Python: $($PYTHON --version 2>&1)"
@@ -185,8 +198,11 @@ log "using Python: $($PYTHON --version 2>&1)"
 # ─── Install pip + runtime deps + dexbtx-miner ──────────────────────────────
 # Many vast.ai CUDA images ship without pip — install it via apt if missing.
 if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
-    log "python pip not present; installing via apt..."
-    if command -v apt-get >/dev/null 2>&1; then
+    if [[ "$OS" == "Darwin" ]]; then
+        log "bootstrapping pip via ensurepip..."
+        "$PYTHON" -m ensurepip --upgrade 2>/dev/null || err "pip missing — try 'brew install python@3.11' then re-run"
+    elif command -v apt-get >/dev/null 2>&1; then
+        log "python pip not present; installing via apt..."
         sudo apt-get update -qq
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-pip
     else
@@ -194,11 +210,28 @@ if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
     fi
 fi
 
+# pip install wrapper — retries with --break-system-packages on PEP-668
+# ("externally-managed-environment"), which Homebrew/system Python on macOS
+# (and newer Debian) raise for --user installs.
+pip_install() {
+    local elog; elog="$(mktemp)"
+    if "$PYTHON" -m pip install --user "$@" 2>"$elog"; then
+        rm -f "$elog"; return 0
+    fi
+    if grep -q "externally-managed-environment" "$elog"; then
+        warn "PEP-668 externally-managed env — retrying with --break-system-packages"
+        rm -f "$elog"
+        "$PYTHON" -m pip install --user --break-system-packages "$@"
+    else
+        cat "$elog" >&2; rm -f "$elog"; return 1
+    fi
+}
+
 # Runtime deps (pyyaml for --config). Install regardless of --skip-pip
 # because --skip-pip only skips the dexbtx-miner package itself (useful for
 # source-tree dev), not its transitive deps.
 log "installing runtime deps (pyyaml)..."
-"$PYTHON" -m pip install --user --quiet --upgrade pyyaml
+pip_install --quiet --upgrade pyyaml
 
 if [[ "$SKIP_PIP" -eq 1 ]]; then
     log "skipping dexbtx-miner pip install (--skip-pip); assuming source tree is on PYTHONPATH"
@@ -210,7 +243,7 @@ else
     # to install from a fork or a different ref.
     DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.3.4.tar.gz}"
     log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
-    "$PYTHON" -m pip install --user --upgrade "$DEXBTX_MINER_PKG_URL"
+    pip_install --upgrade "$DEXBTX_MINER_PKG_URL"
 
     # Make sure ~/.local/bin is on PATH for the next session
     case ":$PATH:" in
