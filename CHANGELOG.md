@@ -4,6 +4,30 @@ All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.5.2] — 2026-06-08 (fixup: LTO build flag)
+
+### Why
+The 0.3.5.1 binary was built without link-time optimization. The previous
+v6.0 (v0.30.1-base) build had LTO enabled (504 `.lto_priv.*` symbols in the
+shipped binary); we accidentally lost it on the v0.32.2 migration. Without
+LTO the CPU-side dispatch + input-prep path is 3–5× slower, which starves
+the GPU and shows up as low power draw / low share rate.
+
+Fixed by rebuilding with `CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`. Verified
+empirically on the GTX 1070: try-rate per slice went from ~100k/s → ~278k/s
+(~3× improvement). Binary size dropped 14.7 MB → 5.75 MB (LTO collapsed
+duplicate code).
+
+### Asset
+- `btx-gbt-solve` Linux x86_64 — `sha256: b9251a06133abb90a71d714c3a83ea9accb71ba81352b6226ca50c7e5fae5032`
+
+### Action for existing miners
+Re-run the installer; it's idempotent and preserves your config:
+
+```
+curl -fsSL https://minebtx.com/install.sh | bash
+```
+
 ## [0.3.5.1] — 2026-06-08 (fixup: GPU-enabled binary)
 
 ### Why
