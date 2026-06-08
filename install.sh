@@ -23,7 +23,7 @@
 # ─── Self-update bootstrap ──────────────────────────────────────────────────
 # Marker — keep this exact line + bump on each release. The bootstrap
 # downstream parses this string and skips re-exec if it matches.
-INSTALL_SH_VERSION="0.3.8"
+INSTALL_SH_VERSION="0.3.9"
 
 INSTALL_SH_LATEST_URL="https://github.com/dexbtx/minebtx/raw/main/install.sh"
 
@@ -304,15 +304,23 @@ if [[ -z "$WORKER" ]]; then
     WORKER="$(hostname -s 2>/dev/null || echo default)"
 fi
 
-# Solver backend default from platform: Metal on Apple Silicon (verified
-# bit-equivalent to the CUDA/CPU kernel in CI), CUDA if an NVIDIA GPU is
-# present, else CPU. Users can override in the config.
+# Solver backend + thread defaults from platform.
+#   Apple Silicon: MLX (Apple's tuned array lib) edges the bespoke Metal
+#   kernels by ~3-4% and is digest-equivalent (valid work either way). The
+#   solver is CPU-prep-bound, so default ALL cores — on an M4, threads=4 left
+#   ~50% of throughput on the table vs threads=ncpu (measured ~70 kN/s ->
+#   ~133 kN/s). Fall back to "metal" in the config if MLX ever misbehaves.
+#   NVIDIA: CUDA, threads=4 (prep-workers are the lever there, not threads).
+#   Otherwise: CPU on all cores.
 if [[ "$OS" == "Darwin" ]]; then
-    SOLVER_BACKEND="metal"
+    SOLVER_BACKEND="mlx"
+    SOLVER_THREADS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 elif [[ "$HAS_NVIDIA" -eq 1 ]]; then
     SOLVER_BACKEND="cuda"
+    SOLVER_THREADS=4
 else
     SOLVER_BACKEND="cpu"
+    SOLVER_THREADS="$(nproc 2>/dev/null || echo 4)"
 fi
 
 # Write config (preserve existing fields if file exists)
@@ -351,8 +359,8 @@ worker_name: "${WORKER}"
 gbt_solve_path: "${SOLVER_PATH}"
 
 # Solver tuning (per-GPU profile chosen from detected hardware: ${GPU_NAME:-CPU only})
-solver_backend: "${SOLVER_BACKEND}"
-solver_threads: 4
+solver_backend: "${SOLVER_BACKEND}"   # Apple Silicon: "mlx" (fastest) or "metal"; NVIDIA: "cuda"; else "cpu"
+solver_threads: ${SOLVER_THREADS}      # solver is prep-bound — all cores on Apple Silicon / CPU
 solver_batch_size: ${GPU_BATCH}        # BTX_MATMUL_SOLVE_BATCH_SIZE
 solver_prefetch_depth: ${GPU_PREFETCH} # BTX_MATMUL_PREPARE_PREFETCH_DEPTH
 solver_prepare_workers: ${GPU_WORKERS} # BTX_MATMUL_PREPARE_WORKERS

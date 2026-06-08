@@ -73,6 +73,13 @@ fee, no separate tool:
 curl -fsSL https://minebtx.com/install.sh | bash -s -- --address 'btx1z…YOUR_BTX_ADDRESS…'
 ```
 
+The Mac config is auto-tuned for the chip: it defaults to the **MLX** backend
+(Apple's tuned array library, ~3-4% faster than the bespoke Metal kernels and
+digest-equivalent) and **all CPU cores** for the prep pipeline — the solver is
+prep-bound, so on an M4 this roughly doubled throughput vs the old 4-thread
+default. Set `solver_backend: "metal"` in the config if you'd rather use the
+hand-written kernels.
+
 Requirements: Apple Silicon (M1 or newer) + Xcode Command Line Tools
 (`xcode-select --install`) + Homebrew. Intel Macs are not supported.
 The build recipe is fully open — see
