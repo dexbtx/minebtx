@@ -23,7 +23,7 @@
 # ─── Self-update bootstrap ──────────────────────────────────────────────────
 # Marker — keep this exact line + bump on each release. The bootstrap
 # downstream parses this string and skips re-exec if it matches.
-INSTALL_SH_VERSION="0.3.13"
+INSTALL_SH_VERSION="0.3.14"
 
 INSTALL_SH_LATEST_URL="https://github.com/dexbtx/minebtx/raw/main/install.sh"
 
@@ -62,6 +62,12 @@ DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-6d773b8b4e74d5b538102c24f67503004c40
 # toolkit variant is cuda12; set DEXBTX_CUDA=cuda13 for newer-driver hosts.
 AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-a69357152702a75a6e96fadfe4aed5c7e34e704754fe4053a4bf0c2998626819}"
 AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-ca63e161c78c7dd8fe6ba2d302a119424fe23813c8e332b1b05a71e938feb5c1}"
+# Linux x86_64 AMD/ROCm (HIP) solver pin — EXPERIMENTAL. Selected when an AMD
+# GPU is present (rocm-smi) or DEXBTX_GPU=rocm. Correctness is enforced by an
+# install-time HIP-vs-CPU self-check below (the HIP kernel is unproven off real
+# AMD silicon). The reference digest for that self-check:
+ROCM_X86_64_SHA256="${ROCM_X86_64_SHA256:-65d178631b4378a7d474d0ecec7609ee01125ccc34770caaf615d898f63ed049}"
+SELFCHECK_REF_DIGEST="7db2e9351c8c947293cb12d086ff03435730156265b67e3bce9dab1956074b14"
 PREBUILDS_BASE="${PREBUILDS_BASE:-https://github.com/dexbtx/minebtx/releases/download/${PREBUILDS_TAG}}"
 # Default asset = Linux x86_64; the Darwin branch below overrides for Apple Silicon.
 SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve"
@@ -120,13 +126,24 @@ log "DEXBTX miner installer — release ${PREBUILDS_TAG}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
+IS_ROCM=0
 case "$OS" in
     Linux)
-        # x86_64 uses the default asset/SHA set above; aarch64 (Grace/GB10)
-        # needs its own ARM64 CUDA build, or install.sh would hand an ARM host
-        # an x86_64 binary that can't exec.
+        # x86_64: default CUDA/CPU asset, unless an AMD GPU is present (ROCm/HIP,
+        # experimental). aarch64 (Grace/GB10) needs its own ARM64 CUDA build, or
+        # install.sh would hand an ARM host an x86_64 binary that can't exec.
         case "$ARCH" in
-            x86_64|amd64) : ;;
+            x86_64|amd64)
+                if [[ "${DEXBTX_GPU:-}" == "rocm" ]] || command -v rocm-smi >/dev/null 2>&1; then
+                    log "AMD/ROCm detected — using the EXPERIMENTAL HIP solver build."
+                    SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve-x86_64-linux-gnu-rocm"
+                    EXPECTED_SHA256="${ROCM_X86_64_SHA256}"
+                    IS_ROCM=1
+                    if [[ "$EXPECTED_SHA256" == "REPLACE_AFTER_FIRST_ROCM_BUILD" ]]; then
+                        err "ROCm solver SHA pin not set yet — run build-solver-rocm (publish) then set ROCM_X86_64_SHA256."
+                    fi
+                fi
+                ;;
             aarch64|arm64)
                 CUDA_VARIANT="${DEXBTX_CUDA:-cuda12}"
                 log "Linux aarch64 detected — using the ARM64 ${CUDA_VARIANT} solver build."
@@ -164,6 +181,9 @@ if [[ "$OS" == "Darwin" ]]; then
     # below is Linux-only — running it on macOS would wrongly warn "CPU only"
     # for what is actually a Metal-accelerated build.
     GPU_NAME="Apple Silicon (Metal)"
+elif [[ "$IS_ROCM" -eq 1 ]]; then
+    # AMD/ROCm — the HIP backend presents as "cuda"; skip the NVIDIA/CPU check.
+    GPU_NAME="AMD GPU (ROCm/HIP, experimental)"
 else
     if command -v nvidia-smi >/dev/null 2>&1; then
         if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | grep -q "."; then
@@ -266,7 +286,7 @@ else
     # GitHub keeps the install pinned to a specific release commit and
     # avoids a third-party package surface. Override DEXBTX_MINER_PKG_URL
     # to install from a fork or a different ref.
-    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.3.8.tar.gz}"
+    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.3.9.tar.gz}"
     log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
     pip_install --upgrade "$DEXBTX_MINER_PKG_URL"
 
@@ -337,6 +357,11 @@ fi
 if [[ "$OS" == "Darwin" ]]; then
     SOLVER_BACKEND="mlx"
     SOLVER_THREADS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+elif [[ "$IS_ROCM" -eq 1 ]]; then
+    # HIP masquerades as backend "cuda"; verified/possibly-downgraded by the
+    # self-check below. Threads=4 (the GPU does the work).
+    SOLVER_BACKEND="cuda"
+    SOLVER_THREADS=4
 elif [[ "$HAS_NVIDIA" -eq 1 ]]; then
     SOLVER_BACKEND="cuda"
     SOLVER_THREADS=4
@@ -396,6 +421,35 @@ reconnect_max_s: 60.0
 log_level: "INFO"
 YAML
     log "config written → $CONFIG_PATH (profile: batch=${GPU_BATCH} prefetch=${GPU_PREFETCH} workers=${GPU_WORKERS})"
+fi
+
+# ─── AMD/ROCm HIP correctness self-check ─────────────────────────────────────
+# The HIP kernel is EXPERIMENTAL and cannot be verified without real AMD
+# hardware (CI has no AMD GPU). So verify it HERE, on the user's actual GPU:
+# run the deterministic post-125000 V2 reference vector through both the HIP
+# backend ("cuda") and the CPU backend and require both to equal the known
+# reference digest. On mismatch we downgrade the config to CPU mining rather
+# than let it submit shares the pool will reject.
+if [[ "$IS_ROCM" -eq 1 ]]; then
+    log "running AMD HIP-vs-CPU correctness self-check on your GPU (experimental backend)..."
+    SC_VEC='{"version":536870912,"prev_hash":"00000000000000000000000000000000000000000000000000000000000000ab","merkle_root":"00000000000000000000000000000000000000000000000000000000000000cd","time":1780000000,"bits":"207fffff","seed_a":"1111111111111111111111111111111111111111111111111111111111111111","seed_b":"2222222222222222222222222222222222222222222222222222222222222222","block_height":130000,"nonce_start":0,"max_tries":256,"max_seconds":60,"share_target":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}'
+    _digest() { echo "$SC_VEC" | BTX_MATMUL_BACKEND="$1" "$SOLVER_PATH" --daemon --backend "$1" --solver-threads 1 2>/dev/null \
+        | grep -oE '"matmul_digest"[^0-9a-f]*[0-9a-f]{64}' | grep -oE '[0-9a-f]{64}' | head -1; }
+    SC_CPU="$(_digest cpu)"
+    SC_HIP="$(_digest cuda)"   # "cuda" == HIP in this build
+    if [[ "$SC_HIP" == "$SELFCHECK_REF_DIGEST" && "$SC_CPU" == "$SELFCHECK_REF_DIGEST" ]]; then
+        log "self-check PASS ✓ HIP digest == CPU == reference — AMD backend is consensus-correct on this GPU."
+    else
+        warn "self-check FAILED — the experimental HIP/ROCm kernel is NOT consensus-correct on this GPU."
+        warn "  cpu=${SC_CPU:-<none>}  hip=${SC_HIP:-<none>}  ref=${SELFCHECK_REF_DIGEST}"
+        warn "  Downgrading to CPU mining (solver_backend: cpu) so you don't submit rejected shares."
+        warn "  Please report your GPU model + gfx arch so the HIP kernel can be fixed (likely the"
+        warn "  wavefront-size / __shfl_down_sync path). GPU mining stays disabled until then."
+        if [[ -f "$CONFIG_PATH" ]]; then
+            sed -i.bak 's/^solver_backend:.*/solver_backend: "cpu"   # auto-downgraded: HIP self-check failed/' "$CONFIG_PATH" 2>/dev/null \
+              || sed -i '' 's/^solver_backend:.*/solver_backend: "cpu"/' "$CONFIG_PATH" 2>/dev/null || true
+        fi
+    fi
 fi
 
 # ─── Hard GPU acceleration smoke test ───────────────────────────────────────
