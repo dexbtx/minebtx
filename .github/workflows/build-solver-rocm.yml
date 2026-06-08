@@ -1,0 +1,175 @@
+name: Build btx-gbt-solve (linux-x86_64-rocm, EXPERIMENTAL)
+
+# EXPERIMENTAL AMD/ROCm build. Upstream has no HIP backend, so we hipify the
+# current cuda/ backend at build time (ROCm ships hipify-perl) and wire it in
+# via scripts/inject-hip-cmake.py — the HIP path reuses the btx::cuda::
+# interface, so it presents to the miner as backend "cuda".
+#
+# IMPORTANT: GitHub has no AMD-GPU runners, so this job builds + verifies the
+# CPU path only (the post-125000 V2 digest gate proves consensus-correctness of
+# the CPU/source path and that the binary links; gfx cubins are checked
+# structurally). The HIP *kernel's* digest correctness can only be proven on a
+# real AMD GPU — install.sh runs a HIP-vs-CPU self-check on the user's box.
+
+on:
+  workflow_dispatch:
+    inputs:
+      btx_tag:
+        description: 'btxchain/btx tag/branch'
+        required: true
+        default: 'v0.32.2'
+      gfx_arches:
+        description: 'AMD GPU archs (semicolon-separated)'
+        required: true
+        default: 'gfx1030;gfx1100;gfx1101;gfx1102'
+      rocm_version:
+        description: 'ROCm apt version'
+        required: true
+        default: '6.2.4'
+      publish_release:
+        description: 'Attach to the prebuilds release as btx-gbt-solve-x86_64-linux-gnu-rocm'
+        required: true
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag to attach to'
+        required: true
+        default: 'btx-prebuilds-v0.32.2'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout this repo (patches, injector, refvec)
+        uses: actions/checkout@v4
+
+      - name: Runner info
+        run: |
+          uname -a
+          nproc
+          df -h /
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential git ninja-build pkg-config \
+            libboost-system-dev libboost-filesystem-dev libboost-test-dev \
+            libevent-dev libsqlite3-dev libzmq3-dev \
+            python3 wget ca-certificates gnupg patch
+
+      - name: Install ROCm toolkit (no driver — CPU-only runner)
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /etc/apt/keyrings
+          wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/rocm.gpg >/dev/null
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${{ inputs.rocm_version }} noble main" \
+            | sudo tee /etc/apt/sources.list.d/rocm.list
+          echo -e "Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600" | sudo tee /etc/apt/preferences.d/rocm-pin-600
+          sudo apt-get update
+          # Toolkit only: hip sdk (hipcc, headers, host runtime), llvm, hipify.
+          sudo apt-get install -y --no-install-recommends rocm-hip-sdk rocm-llvm hipify-clang
+          echo "/opt/rocm/bin" >> "$GITHUB_PATH"
+          /opt/rocm/bin/hipcc --version | head -3 || true
+          ls /opt/rocm/bin/hipify-perl
+
+      - name: Clone BTX source
+        run: |
+          git clone --depth 1 --branch "${{ inputs.btx_tag }}" https://github.com/btxchain/btx btx-src
+          (cd btx-src && git rev-parse HEAD)
+
+      - name: Apply dexbtx solver patches (share-target + gbt-solve target)
+        working-directory: btx-src
+        run: |
+          set -euo pipefail
+          P="$GITHUB_WORKSPACE/.github/build-patches"
+          for p in 02-pow-h-share-target-override.patch \
+                   03-pow-cpp-share-target-override.patch \
+                   05-cmakelists-add-gbt-solve-target.patch; do
+            echo "=== $p ==="; patch -p1 < "$P/$p"
+          done
+          cp "$P/btx-gbt-solve.cpp" src/btx-gbt-solve.cpp
+          grep -q "nMatMulNonceSeedHeight = 125'000" src/btx-gbt-solve.cpp || { echo "V2 height missing"; exit 1; }
+
+      - name: Hipify cuda/ backend -> hip/ + inject CMake HIP branch
+        working-directory: btx-src
+        run: |
+          set -euo pipefail
+          mkdir -p src/hip
+          # Declaration headers are CUDA-runtime-free — copy as-is so same-dir includes resolve.
+          cp src/cuda/matmul_accel.h src/cuda/oracle_accel.h src/cuda/cuda_context.h src/hip/ 2>/dev/null || true
+          for f in matmul_accel oracle_accel; do
+            /opt/rocm/bin/hipify-perl "src/cuda/${f}.cu" > "src/hip/${f}.hip"
+          done
+          /opt/rocm/bin/hipify-perl src/cuda/cuda_context.cpp > src/hip/cuda_context.cpp
+          echo "=== hipify output head ==="; head -25 src/hip/matmul_accel.hip
+          python3 "$GITHUB_WORKSPACE/scripts/inject-hip-cmake.py" src/CMakeLists.txt
+          grep -n "BTX_ENABLE_HIP_EXPERIMENTAL" src/CMakeLists.txt | head
+
+      - name: Configure (HIP)
+        working-directory: btx-src
+        env:
+          ROCM_PATH: /opt/rocm
+        run: |
+          set -euo pipefail
+          cmake -B build -S . -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBTX_ENABLE_HIP_EXPERIMENTAL=ON \
+            -DBTX_HIP_ARCHITECTURES="${{ inputs.gfx_arches }}" \
+            -DCMAKE_HIP_ARCHITECTURES="${{ inputs.gfx_arches }}" \
+            -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ \
+            -DCMAKE_HIP_PLATFORM=amd \
+            -Dhip_DIR=/opt/rocm/lib/cmake/hip \
+            -DBUILD_GUI=OFF -DBUILD_TESTS=OFF -DBUILD_BENCH=OFF \
+            -DBUILD_FUZZ_BINARY=OFF -DBUILD_UTIL=ON
+
+      - name: Build btx-gbt-solve
+        working-directory: btx-src
+        run: cmake --build build --target btx-gbt-solve -j "$(nproc)"
+
+      - name: Inspect + gfx-arch structural check
+        working-directory: btx-src/build
+        run: |
+          set -euo pipefail
+          BIN="$(find . -name btx-gbt-solve -type f -perm -u+x | head -1)"
+          echo "BIN=$PWD/${BIN#./}" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp "$BIN" "$GITHUB_WORKSPACE/out/btx-gbt-solve-x86_64-linux-gnu-rocm"
+          ls -la "$BIN"; file "$BIN"
+          echo "=== embedded gfx archs ==="
+          strings "$BIN" | grep -Eo 'gfx[0-9]{3,4}' | sort -u || echo "WARN: no gfx strings found"
+          echo "=== --help ==="; "$BIN" --help 2>&1 | grep -E 'daemon|share-target|backend' || true
+
+      - name: Verify CPU path vs post-125000 V2 reference
+        working-directory: btx-src/build
+        run: |
+          set -euo pipefail
+          REF="$GITHUB_WORKSPACE/.github/build-patches/ci-refvec.json"
+          EXP="$(python3 -c "import json;print(json.load(open('$REF'))['expected']['matmul_digest'])")"
+          VEC="$(python3 -c "import json;print(json.dumps(json.load(open('$REF'))['job']))")"
+          GOT="$(echo "$VEC" | BTX_MATMUL_BACKEND=cpu "$BIN" --daemon --backend cpu --solver-threads 1 2>/dev/null \
+                 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("matmul_digest","NONE"))')"
+          echo "expected=$EXP got=$GOT"
+          [ "$GOT" = "$EXP" ] || { echo "FAIL: CPU digest mismatch"; exit 1; }
+          echo "PASS: CPU path consensus-correct (V2). NOTE: HIP kernel correctness unproven without AMD GPU."
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: btx-gbt-solve-x86_64-linux-gnu-rocm-${{ inputs.btx_tag }}
+          path: out/btx-gbt-solve-x86_64-linux-gnu-rocm
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish to release (optional)
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          A="out/btx-gbt-solve-x86_64-linux-gnu-rocm"
+          echo "sha256 to pin (ROCM_X86_64_SHA256): $(sha256sum "$A" | awk '{print $1}')"
+          gh release upload "${{ inputs.release_tag }}" "$A" --repo "${{ github.repository }}" --clobber
