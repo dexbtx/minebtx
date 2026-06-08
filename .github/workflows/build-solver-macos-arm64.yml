@@ -1,0 +1,177 @@
+name: Build btx-gbt-solve (macos-arm64-metal)
+
+# Manual trigger — builds the dexbtx-patched btx-gbt-solve for Apple Silicon
+# (arm64) with the Metal backend. Sibling of build-solver-aarch64.yml; same
+# patches, same V2 (nonce-seed) solver source, no CUDA.
+#
+# Output: workflow artifact `btx-gbt-solve-darwin-arm64-<tag>` containing the
+# built binary. The verify step gates on a post-125000 V2 reference digest, so
+# a green run guarantees the Metal kernel is bit-equivalent to the production
+# Linux solver. To publish: download from the run (or flip publish_release=true
+# to attach it to the prebuilds release as asset `btx-gbt-solve-darwin-arm64`).
+#
+# Patches applied (from .github/build-patches/) — note 01 (CUDA capability
+# gate) is intentionally SKIPPED: it touches src/cuda/ which isn't compiled on
+# macOS (CUDA is off), and is a no-op for the Metal build.
+#   02-pow-h-share-target-override.patch    — restore share_target_override decl
+#   03-pow-cpp-share-target-override.patch  — restore share_target_override impl
+#   05-cmakelists-add-gbt-solve-target.patch — make btx-gbt-solve a build target
+#   btx-gbt-solve.cpp (full file)           — copied in; sets nMatMulNonceSeedHeight=125000
+
+on:
+  workflow_dispatch:
+    inputs:
+      btx_tag:
+        description: 'btxchain/btx tag/branch to build from'
+        required: true
+        default: 'v0.32.2'
+      publish_release:
+        description: 'Attach the binary to the prebuilds release as btx-gbt-solve-darwin-arm64'
+        required: true
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag to attach the asset to (when publish_release=true)'
+        required: true
+        default: 'btx-prebuilds-v0.32.2'
+
+jobs:
+  build:
+    runs-on: macos-14   # Apple Silicon (M1) — real GPU, so --backend metal genuinely engages
+    timeout-minutes: 90
+    steps:
+      - name: Checkout this repo (for patches + reference vector)
+        uses: actions/checkout@v4
+
+      - name: Show runner info
+        run: |
+          uname -a
+          sysctl -n machdep.cpu.brand_string || true
+          sysctl -n hw.ncpu
+          xcrun --version || true
+          xcrun -sdk macosx metal --version 2>&1 | head -2 || true
+
+      - name: Install build deps (brew)
+        run: |
+          brew update
+          # cmake/boost/libevent are the core BTX build deps; pkgconf for find;
+          # ninja for a faster build. sqlite3 ships in the macOS SDK.
+          brew install cmake boost libevent pkgconf ninja
+
+      - name: Clone BTX source
+        run: |
+          git clone --depth 1 --branch "${{ inputs.btx_tag }}" \
+            https://github.com/btxchain/btx btx-src
+          (cd btx-src && git rev-parse HEAD)
+
+      - name: Apply dexbtx patches (no CUDA gate on macOS)
+        working-directory: btx-src
+        run: |
+          set -euo pipefail
+          PATCH_DIR="$GITHUB_WORKSPACE/.github/build-patches"
+          ls -la "$PATCH_DIR"
+          for p in 02-pow-h-share-target-override.patch \
+                   03-pow-cpp-share-target-override.patch \
+                   05-cmakelists-add-gbt-solve-target.patch; do
+            echo "=== applying $p ==="
+            patch -p1 < "$PATCH_DIR/$p"
+          done
+          cp "$PATCH_DIR/btx-gbt-solve.cpp" src/btx-gbt-solve.cpp
+          echo "=== verify V2 activation height is set in solver source ==="
+          grep -n "nMatMulNonceSeedHeight = 125'000\|nMatMulNonceSeedHeight = 125000" src/btx-gbt-solve.cpp \
+            || { echo "ERROR: V2 activation height not set"; exit 1; }
+
+      - name: Configure cmake (Metal, no CUDA)
+        working-directory: btx-src
+        run: |
+          set -euo pipefail
+          mkdir -p build && cd build
+          cmake .. -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -DBTX_ENABLE_CUDA_EXPERIMENTAL=OFF \
+            -DBTX_ENABLE_METAL=ON \
+            -DBTX_MATMUL_METAL_PRECOMPILE_KERNELS=ON \
+            -DBUILD_GUI=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_BENCH=OFF \
+            -DBUILD_FUZZ_BINARY=OFF \
+            -DBUILD_UTIL=ON
+
+      - name: Build btx-gbt-solve + backend-info
+        working-directory: btx-src/build
+        run: |
+          set -euo pipefail
+          cmake --build . --target btx-gbt-solve btx-matmul-backend-info -j "$(sysctl -n hw.ncpu)"
+
+      - name: Inspect binary
+        working-directory: btx-src/build
+        run: |
+          set -euo pipefail
+          BIN="$(find . -name btx-gbt-solve -type f -perm +111 | head -1)"
+          echo "BIN=$BIN" >> "$GITHUB_ENV"
+          ls -la "$BIN"
+          file "$BIN"
+          lipo -archs "$BIN" || true
+          echo "SHA256: $(shasum -a 256 "$BIN" | awk '{print $1}')"
+          echo "=== --help (expect share-target + daemon + metal) ==="
+          "$BIN" --help 2>&1 | head -40 || true
+          echo "=== Metal framework actually linked? ==="
+          otool -L "$BIN" | grep -iE "Metal|Foundation" || echo "WARN: no Metal/Foundation in otool -L"
+
+      - name: Assert Metal backend is available (not CPU-only)
+        working-directory: btx-src/build
+        run: |
+          set -euo pipefail
+          INFO="$(find . -name btx-matmul-backend-info -type f | head -1)"
+          echo "backend-info: $INFO"
+          OUT="$("$INFO" 2>&1 || true)"
+          echo "$OUT"
+          echo "$OUT" | grep -iE "metal" | grep -ivE "unavailable|not available|disabled" \
+            || { echo "ERROR: Metal backend not reported available — build would silently CPU-fallback"; exit 1; }
+
+      - name: Verify bit-equivalence vs post-125000 V2 reference digest
+        working-directory: btx-src/build
+        run: |
+          set -euo pipefail
+          REF="$GITHUB_WORKSPACE/.github/build-patches/ci-refvec.json"
+          EXP_DIGEST="$(python3 -c "import json;print(json.load(open('$REF'))['expected']['matmul_digest'])")"
+          VEC="$(python3 -c "import json;print(json.dumps(json.load(open('$REF'))['job']))")"
+          echo "expected digest: $EXP_DIGEST"
+          echo "vector: $VEC"
+          run_backend() {
+            local be="$1"
+            echo "$VEC" | BTX_MATMUL_BACKEND="$be" "$BIN" --daemon --backend "$be" --solver-threads 1 2>/dev/null \
+              | python3 -c "import sys,json;print(json.load(sys.stdin).get('matmul_digest','NONE'))"
+          }
+          CPU_D="$(run_backend cpu)";   echo "cpu   digest: $CPU_D"
+          METAL_D="$(run_backend metal)"; echo "metal digest: $METAL_D"
+          [ "$CPU_D" = "$EXP_DIGEST" ]   || { echo "FAIL: CPU digest mismatch (kernel/source wrong)"; exit 1; }
+          [ "$METAL_D" = "$EXP_DIGEST" ] || { echo "FAIL: Metal digest mismatch (Metal kernel NOT bit-equivalent)"; exit 1; }
+          echo "PASS: cpu == metal == reference. Metal kernel is consensus-correct post-125000."
+
+      - name: Stage binary for upload
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp "$BIN" out/btx-gbt-solve-darwin-arm64
+          shasum -a 256 out/btx-gbt-solve-darwin-arm64 | tee out/btx-gbt-solve-darwin-arm64.sha256
+          echo "Pin this in pyproject.toml/install.sh: $(awk '{print $1}' out/btx-gbt-solve-darwin-arm64.sha256)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: btx-gbt-solve-darwin-arm64-${{ inputs.btx_tag }}
+          path: out/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish to release (optional)
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ inputs.release_tag }}" \
+            out/btx-gbt-solve-darwin-arm64 \
+            --repo "${{ github.repository }}" --clobber

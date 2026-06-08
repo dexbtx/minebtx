@@ -1,0 +1,26 @@
+{
+  "_comment": "Post-125000 V2 (nonce-bound seed) bit-equivalence reference for btx-gbt-solve. Generated 2026-06-08 from the production v0.32.2 Linux solver (sha256 b9251a06133abb90...) via the CPU backend at --solver-threads 1. block_height=130000 is past nMatMulNonceSeedHeight (125000), so this exercises the SolveMatMulNonceSeeded path (per-nonce DeterministicMatMulSeedV2). MUST use --solver-threads 1: the parallel solver fans the nonce range across threads non-deterministically, so multi-threaded runs find a different first nonce. nonce_start=0 + loose share_target => nonce 0 wins deterministically. Any correctly built solver (Linux, or macOS CPU/Metal) must reproduce expected.matmul_digest.",
+  "job": {
+    "version": 536870912,
+    "prev_hash": "00000000000000000000000000000000000000000000000000000000000000ab",
+    "merkle_root": "00000000000000000000000000000000000000000000000000000000000000cd",
+    "time": 1780000000,
+    "bits": "207fffff",
+    "seed_a": "1111111111111111111111111111111111111111111111111111111111111111",
+    "seed_b": "2222222222222222222222222222222222222222222222222222222222222222",
+    "block_height": 130000,
+    "nonce_start": 0,
+    "max_tries": 256,
+    "max_seconds": 30,
+    "share_target": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "run_with": { "backend": "cpu|metal", "solver_threads": 1 },
+  "expected": {
+    "found": true,
+    "nonce64": 0,
+    "is_block": true,
+    "matmul_digest": "7db2e9351c8c947293cb12d086ff03435730156265b67e3bce9dab1956074b14",
+    "matrix_c_data_words": 262144,
+    "matrix_c_data_sha256": "88537aa210e60b15bd13f2cbc9957aed40748ed298a992143b71d801f04d810c"
+  }
+}
