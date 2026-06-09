@@ -407,8 +407,27 @@ class StratumClient:
     async def _solver_loop(self) -> None:
         """Pump nonce slices into the solver against the current job.
 
-        Tears down + restarts on every job change so we don't waste cycles
-        on stale work.
+        v0.4.3 — slice-result handling rewritten from first principles.
+        Old (pre-v0.4.3) flow dropped any slice result whose job_id no
+        longer matched `_current_job.job_id`. With BTX's pool emitting
+        a notify every ~5s on mempool churn (same parent block,
+        `clean=False`) and slice durations of ~5–15s, EVERY slice
+        intersected with at least one notify. Result: every slice's
+        work was dropped, nonce_start never advanced, throughput ≈ 0.
+
+        The job_id check was misplaced: stratum allows submission
+        against any cached job_id, and the pool keeps a JobCache (8192
+        slots since v0.8.6) precisely to serve same-parent rotations.
+        New flow:
+          - ALWAYS submit found shares — pool's validator + JobCache
+            handle staleness correctly; the wrapper has no business
+            second-guessing.
+          - ALWAYS advance nonce_start across same-parent rotations
+            (use `previousblockhash` equality, NOT `job_id`). A
+            different job_id with the same parent is just a coinbase /
+            merkle rotation; our nonce-scan position is still valid.
+          - On real parent change (`previousblockhash` differs) the new
+            job's broadcast `nonce64_start` is honored (true reset).
         """
         while True:
             if self._current_job is None:
@@ -431,14 +450,24 @@ class StratumClient:
                     max_tries=self.cfg.nonces_per_slice,
                     max_seconds=self.cfg.solver_max_seconds_per_slice,
                 )
-                if self._current_job is None or self._current_job.job_id != job.job_id:
-                    log.debug("dropping result for stale job %s", job.job_id)
-                elif result.found:
+                # v0.4.3 — always submit found shares; let pool decide
+                # validity via its JobCache. Pre-v0.4.3 this was gated on
+                # current_job.job_id matching slice.job_id and dropped
+                # every slice that intersected a notify (~all of them at
+                # 5s notify cadence + 5–15s slice duration).
+                if result.found:
+                    if self._current_job is None or self._current_job.job_id != job.job_id:
+                        log.info(
+                            "submitting found share for rotated job_id %s "
+                            "(current=%s): pool's JobCache handles same-parent staleness",
+                            job.job_id,
+                            self._current_job.job_id if self._current_job else "(none)",
+                        )
                     await self._submit_share(job, result)
                 # Compute the next nonce_start. Patched solver emits
-                # `nonce64_end` always — that's the canonical "where to resume".
-                # tries_used is an internal counter that under-counts by orders
-                # of magnitude and would cause us to re-scan the same range.
+                # `nonce64_end` always — canonical "where to resume".
+                # tries_used under-counts by orders of magnitude and
+                # would cause re-scanning the same range.
                 if result.nonce_end is not None and result.nonce_end > nonce_start:
                     next_nonce_start = result.nonce_end + 1
                 else:
@@ -452,8 +481,23 @@ class StratumClient:
                 await asyncio.sleep(1.0)
                 next_nonce_start = nonce_start + self.cfg.nonces_per_slice
 
-            # If the job hasn't changed, set next nonce_start and continue.
-            if self._current_job is not None and self._current_job.job_id == job.job_id:
+            # v0.4.3 — advance nonce_start across same-parent rotations,
+            # not just same-job_id. With pool sending clean=False
+            # rotations every ~5s (mempool/coinbase rebuild on the same
+            # parent), our nonce-scan position is still valid against
+            # the new merkle root — different coinbase, same parent
+            # block, same V2 nonce-seed domain. Gating on job_id meant
+            # nonce_start was reset to the broadcast value on every
+            # rotation (because the new job_id never matches the slice's
+            # old job_id under 5s notify cadence + 5–15s slice duration).
+            #
+            # On real parent change (clean=True), the new job's
+            # `previousblockhash` differs and we correctly leave its
+            # broadcast `nonce64_start` in place (true reset).
+            if (
+                self._current_job is not None
+                and self._current_job.previousblockhash == job.previousblockhash
+            ):
                 self._current_job.matmul["nonce64_start"] = next_nonce_start
 
     async def _submit_share(self, job: Job, share: SolveResult) -> None:

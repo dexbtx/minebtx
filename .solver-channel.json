@@ -1,6 +1,6 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "released_at": "2026-06-09",
   "notes": "v0.4.1 — wrapper-side auto-self-upgrade. Wrapper checks this manifest's `version` field at startup and pip-upgrades itself + re-execs when stale (mirrors solver-binary auto-update). Binaries unchanged from v0.4.0 (BTX v0.32.3, 4 platforms). Operators on ≤0.4.0 still need ONE re-run of install.sh (or pip install --upgrade) to land on v0.4.1; from v0.4.1 onward wrapper updates flow automatically.",
   "platforms": {

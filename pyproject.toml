@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dexbtx-miner"
-version = "0.4.2"
+version = "0.4.3"
 description = "DEXBTX native stratum miner. Wraps btx-gbt-solve and speaks stratum/2.0-matmul."
 # Python 3.10+ supported. The codebase uses PEP 604 unions and dataclass
 # match (3.10), no 3.11-only syntax.

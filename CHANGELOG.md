@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.4.3] — 2026-06-09 (CRITICAL: never drop stale-job-id slice results)
+
+### The deeper bug
+After v0.4.2 landed (carry nonce_start across clean=false notify), the
+Mac tester ran v0.4.2 + v0.32.3 + pool-server v0.8.12 and got STILL
+~zero shares despite the nonce_start carry-over working. CPU at 25%
+(~2 cores) instead of the 700-900% expected on a saturated solver,
+"23 notifies received, 0 shares produced."
+
+### First-principles diagnosis
+With pool emitting a notify every ~5s (mempool churn) and slices
+taking 5-15s on a real workload, EVERY slice intersected with at
+least one notify. The wrapper's `_solver_loop` (line 421) had a
+stale-job-id check that DROPPED any slice result whose `job_id` no
+longer matched the current `_current_job.job_id` — which meant every
+slice's work was thrown away even when the slice's submitted nonce
+WOULD have been accepted by the pool (the pool's JobCache, 8192 slots
+since v0.8.6, keeps prior job_ids around precisely to serve same-parent
+rotations).
+
+Compounding: line 443 gated the nonce-progress write-back on the same
+job_id check, so even unstale slices' nonce_end never updated
+`_current_job.nonce_start`. Net: nonce stayed frozen across rotations
+even when the v0.4.2 carry-forward was working as designed.
+
+### Fix
+Two semantic corrections in `stratum_client.py::_solver_loop`:
+
+1. **Always submit found shares.** Pool's JobCache + share_validator
+   handle staleness correctly. Wrapper has no business pre-filtering.
+   When `_current_job.job_id != job.job_id`, log an info line
+   acknowledging the rotation and submit anyway — pool will accept or
+   reject as appropriate.
+
+2. **Advance nonce_start across same-parent rotations.** Gate the
+   `next_nonce_start` write-back on `previousblockhash` equality, not
+   `job_id`. Same parent → our nonce-scan position is still valid
+   against the new merkle root. Different parent (clean=True
+   semantically) → leave the new job's broadcast `nonce64_start` in
+   place; that's a true reset.
+
+### Verified on home-1070 (GTX 1070 Pascal sm_61)
+- 64 slices over 5 min observation window
+- Nonce_start advancing continuously across 60+ clean=False notifies
+- Solver finds + wrapper submits + pool ACCEPTS share — `share OK
+  job=0x1f8 nonce=3564825495506 (a/r/b=1/0/0)`
+- Pre-v0.4.3: 0 shares ever. Post-v0.4.3: shares flowing.
+
+### Outstanding (separate work)
+- GPU utilization ~32% (should be 99% on a well-tuned 1070) — slice
+  cadence + per-slice setup overhead leaves the GPU idle most of the
+  time. Pipeline overlap (next slice queued before current returns)
+  would help. Separate effort.
+- Share find rate is below theoretical given share_target math — also
+  worth a separate kernel/protocol audit. Not blocking v0.4.3.
+
 ## [0.4.2] — 2026-06-09 (CRITICAL: carry nonce-progress on clean=false notify)
 
 ### The bug
