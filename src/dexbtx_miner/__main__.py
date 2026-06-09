@@ -22,6 +22,7 @@ from pathlib import Path
 from .config import MinerConfig, load_yaml_config
 from .solver_updater import SolverUpdateRequired, maybe_update_solver
 from .stratum_client import StratumClient
+from .wrapper_updater import maybe_self_upgrade
 
 log = logging.getLogger(__name__)
 
@@ -140,6 +141,20 @@ async def _run(cfg: MinerConfig) -> int:
 
 
 def main() -> int:
+    # v0.4.1: at process start, check the channel manifest for a newer
+    # wrapper. If one is published, pip-upgrade + re-exec — from this
+    # version onward operators don't have to re-run install.sh to pick
+    # up wrapper improvements. Mirrors solver_updater's fail-open
+    # semantics; logs warnings on error, never raises. Bare logging
+    # config so the bootstrap path is visible even before _setup_logging
+    # in _run runs.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    maybe_self_upgrade()
+
     # Subcommand dispatch: `dexbtx-miner benchmark ...` runs the benchmark.
     # Everything else (no subcommand or unknown first arg) falls through to
     # the mining argparser, preserving back-compat with `dexbtx-miner --pool ...`.

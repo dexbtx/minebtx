@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.4.1] — 2026-06-09 (wrapper auto-self-upgrade)
+
+### Why
+v0.3.6 shipped solver-binary auto-update; v0.4.0 bumped the solver to
+BTX v0.32.3 and added BTX_CUDA_ALLOW_OLDER_GPUS=1 in the wrapper. But
+the WRAPPER itself can only be upgraded by re-running install.sh or
+`pip install --upgrade` — there's no automatic path from an older
+wrapper to a newer one. Result: Pascal/Turing operators on v0.3.x
+wrappers don't pick up the v0.4.0 env-var fix without operator action.
+
+### What
+- New `src/dexbtx_miner/wrapper_updater.py`. At process start the
+  wrapper fetches `.solver-channel.json`, reads `version`, and if
+  newer than `dexbtx_miner.__version__` pip-installs the new tag's
+  tarball and `os.execvpe`s with the same argv. Mirrors
+  solver_updater.py's defaults + fail-open semantics.
+  - PEP-668 `--break-system-packages` retry like install.sh
+  - Loop-guard via `DEXBTX_WRAPPER_JUST_UPGRADED` env var (broken
+    release can't ping-pong the operator's miner)
+  - Opt-out: `DEXBTX_NO_WRAPPER_AUTOUPDATE=1`
+  - Overrides: `DEXBTX_MANIFEST_URL`, `DEXBTX_MINER_PKG_URL_TEMPLATE`
+- `__main__.py::main()` calls `maybe_self_upgrade()` at the very top.
+- `.solver-channel.json` version 0.4.0 → 0.4.1.
+- `install.sh` DEXBTX_MINER_PKG_URL default → v0.4.1 tag.
+
+### Operator impact
+Operators on ≤0.4.0 still need ONE manual upgrade (re-run install.sh
+or `pip install --upgrade dexbtx-miner`) to land on v0.4.1. From
+v0.4.1 onward, wrapper updates flow automatically. Pool-server
+v0.8.10 nudges TG-linked operators with a stale-version DM.
+
 ## [0.4.0] — 2026-06-09 (ship BTX v0.32.3 solver)
 
 ### Why

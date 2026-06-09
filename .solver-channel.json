@@ -1,8 +1,8 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "released_at": "2026-06-09",
-  "notes": "Multi-platform release for BTX v0.32.3 (major upstream perf rewrite). x86_64-linux + aarch64-linux (cuda12/13) + arm64-darwin all rebuilt; 3 of 4 carried patches now upstream (only patch 05 cmake target remains). Pascal/Turing operators need pip-upgrade or env var BTX_CUDA_ALLOW_OLDER_GPUS=1 (handled automatically by the v0.4.0 wrapper).",
+  "notes": "v0.4.1 — wrapper-side auto-self-upgrade. Wrapper checks this manifest's `version` field at startup and pip-upgrades itself + re-execs when stale (mirrors solver-binary auto-update). Binaries unchanged from v0.4.0 (BTX v0.32.3, 4 platforms). Operators on ≤0.4.0 still need ONE re-run of install.sh (or pip install --upgrade) to land on v0.4.1; from v0.4.1 onward wrapper updates flow automatically.",
   "platforms": {
     "x86_64-linux": {
       "sha256": "dcef2c8180b621003053fbc1a7dc58275a2f81794dd405d5b10bc1bad6bb8cd9",
