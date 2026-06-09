@@ -6,7 +6,7 @@ canonical CUDA kernel + pre-loaded cubins for the duration of the session
 (eliminating per-slice CUDA-context-init cost).
 """
 
-__version__ = "0.3.7"
+__version__ = "0.4.0"
 # Single source of truth for the User-Agent string sent in mining.subscribe.
 # Keep this synced with pyproject.toml's [project].version on every release.
 USER_AGENT = f"dexbtx-miner/{__version__}"

@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.4.0] — 2026-06-09 (ship BTX v0.32.3 solver)
+
+### Why
+Upstream BTX v0.32.3 incorporated 3 of our 4 carried patches and shipped
+a substantial CUDA matmul rewrite (release notes claim ~14k → ~2.45M
+nonces/sec, ~174× faster). Time to migrate the fleet.
+
+### What
+- All 4 platform solver binaries rebuilt from `v0.32.3`:
+  - `x86_64-linux` (CUDA 12.8, archs sm_61 through sm_120, LTO)
+  - `aarch64-linux-cuda12` (sm_80;90;120)
+  - `aarch64-linux-cuda13` (sm_80;90;120;121, GB10/Spark)
+  - `arm64-darwin` (Metal)
+- Patches dropped (now upstream):
+  - 01-cuda-capability-gate (now env var `BTX_CUDA_ALLOW_OLDER_GPUS=1`)
+  - 02-pow-h-share-target-override (in upstream pow.h)
+  - 03-pow-cpp-share-target-override (in upstream pow.cpp)
+- Only patch 05 (cmake build target for `btx-gbt-solve`) is still carried,
+  plus the `btx-gbt-solve.cpp` drop-in itself.
+- `gbt_solve_wrapper.py` sets `BTX_CUDA_ALLOW_OLDER_GPUS=1` by default via
+  `env.setdefault` so Pascal/Turing GPUs keep working without manual env
+  setup. No-op on Ampere+.
+
+### Pascal / Turing notice
+v0.32.3 defaults CUDA to sm_80+. Operators on 10xx, 16xx, or 20xx need
+either re-run `install.sh`, `pip install --upgrade dexbtx-miner`, or
+set `BTX_CUDA_ALLOW_OLDER_GPUS=1` manually. Otherwise CUDA silently
+CPU-fallbacks ~100× slower.
+
 All notable changes to `dexbtx-miner` are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [Semantic Versioning](https://semver.org/).
