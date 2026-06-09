@@ -10,11 +10,14 @@ name: Build btx-gbt-solve (aarch64-linux-cuda)
 # automatically once we've validated a few successful builds).
 #
 # Patches applied (from .github/build-patches/):
-#   01-cuda-capability-gate.patch   — MIN_SUPPORTED_COMPUTE_CAPABILITY_MAJOR 8→6
-#   02-pow-h-share-target-override.patch  — restore share_target_override decl
-#   03-pow-cpp-share-target-override.patch — restore share_target_override impl
 #   05-cmakelists-add-gbt-solve-target.patch — make btx-gbt-solve a build target
 #   btx-gbt-solve.cpp (full file)   — copied in; upstream tree doesn't have it
+#
+# Patches 01/02/03 dropped at v0.32.3 — all upstreamed:
+#   - share_target_override restored upstream in pow.h/pow.cpp (patches 02/03)
+#   - CUDA capability gate now opt-in via env var BTX_CUDA_ALLOW_OLDER_GPUS=1
+#     (patch 01) — the wrapper / install.sh sets this at runtime; no source
+#     patch needed. Without the env var, the runtime gate stays at sm_80+.
 
 on:
   workflow_dispatch:
@@ -22,7 +25,7 @@ on:
       btx_tag:
         description: 'btxchain/btx tag/branch to build from'
         required: true
-        default: 'v0.32.2'
+        default: 'v0.32.3'
       cuda_arches:
         description: 'CUDA archs (semicolon-separated). NOTE: sm_121 requires CUDA 13.0+. With cuda_version=12-8 use 80;90;120 (Ampere through Blackwell consumer).'
         required: true
@@ -41,7 +44,7 @@ on:
       release_tag:
         description: 'Release tag to attach the asset to (when publish_release=true)'
         required: true
-        default: 'btx-prebuilds-v0.32.2'
+        default: 'btx-prebuilds-v0.32.3'
 
 jobs:
   build:
@@ -97,22 +100,25 @@ jobs:
           echo "Patches available:"
           ls -la "$PATCH_DIR"
 
-          # Apply each upstream-file patch
-          for p in 01-cuda-capability-gate.patch \
-                   02-pow-h-share-target-override.patch \
-                   03-pow-cpp-share-target-override.patch \
-                   05-cmakelists-add-gbt-solve-target.patch; do
+          # Apply each upstream-file patch (just 05 since v0.32.3)
+          for p in 05-cmakelists-add-gbt-solve-target.patch; do
             echo "=== applying $p ==="
             patch -p1 < "$PATCH_DIR/$p"
           done
 
           # Copy in btx-gbt-solve.cpp (full file; upstream tree doesn't have it).
-          # File already has nMatMulNonceSeedHeight=125000 set internally.
+          # v0.32.3 sets nMatMulNonceSeedHeight=125'000 in chainparams.cpp for
+          # mainnet, so the inline override in btx-gbt-solve.cpp is now
+          # redundant-but-harmless (sets the same value).
           cp "$PATCH_DIR/btx-gbt-solve.cpp" src/btx-gbt-solve.cpp
           echo "=== btx-gbt-solve.cpp installed ==="
           ls -la src/btx-gbt-solve.cpp
-          grep -n "nMatMulNonceSeedHeight" src/btx-gbt-solve.cpp || \
-            (echo "ERROR: V2 activation height not set in btx-gbt-solve.cpp"; exit 1)
+          # Sanity: confirm upstream now has the chainparams-side V2 activation.
+          grep -n "nMatMulNonceSeedHeight = 125" src/kernel/chainparams.cpp \
+            || (echo "ERROR: v0.32.3 chainparams missing V2 activation — wrong tag?"; exit 1)
+          # Sanity: confirm upstream now has share_target_override (patches 02/03 obsolete).
+          grep -nE 'share_target_override' src/pow.h src/pow.cpp \
+            || (echo "ERROR: v0.32.3 missing share_target_override — wrong tag?"; exit 1)
 
       - name: Configure cmake
         working-directory: btx-src

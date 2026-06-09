@@ -10,13 +10,12 @@ name: Build btx-gbt-solve (macos-arm64-metal)
 # Linux solver. To publish: download from the run (or flip publish_release=true
 # to attach it to the prebuilds release as asset `btx-gbt-solve-darwin-arm64`).
 #
-# Patches applied (from .github/build-patches/) — note 01 (CUDA capability
-# gate) is intentionally SKIPPED: it touches src/cuda/ which isn't compiled on
-# macOS (CUDA is off), and is a no-op for the Metal build.
-#   02-pow-h-share-target-override.patch    — restore share_target_override decl
-#   03-pow-cpp-share-target-override.patch  — restore share_target_override impl
+# Patches applied (from .github/build-patches/):
 #   05-cmakelists-add-gbt-solve-target.patch — make btx-gbt-solve a build target
-#   btx-gbt-solve.cpp (full file)           — copied in; sets nMatMulNonceSeedHeight=125000
+#   btx-gbt-solve.cpp (full file)           — copied in; upstream tree doesn't have it
+#
+# Patches 02/03 dropped at v0.32.3 — share_target_override is now upstream
+# in pow.h/pow.cpp. Patch 01 was never applied on macOS anyway (CUDA off).
 
 on:
   workflow_dispatch:
@@ -24,7 +23,7 @@ on:
       btx_tag:
         description: 'btxchain/btx tag/branch to build from'
         required: true
-        default: 'v0.32.2'
+        default: 'v0.32.3'
       publish_release:
         description: 'Attach the binary to the prebuilds release as btx-gbt-solve-darwin-arm64'
         required: true
@@ -33,7 +32,7 @@ on:
       release_tag:
         description: 'Release tag to attach the asset to (when publish_release=true)'
         required: true
-        default: 'btx-prebuilds-v0.32.2'
+        default: 'btx-prebuilds-v0.32.3'
 
 jobs:
   build:
@@ -72,16 +71,17 @@ jobs:
           set -euo pipefail
           PATCH_DIR="$GITHUB_WORKSPACE/.github/build-patches"
           ls -la "$PATCH_DIR"
-          for p in 02-pow-h-share-target-override.patch \
-                   03-pow-cpp-share-target-override.patch \
-                   05-cmakelists-add-gbt-solve-target.patch; do
+          for p in 05-cmakelists-add-gbt-solve-target.patch; do
             echo "=== applying $p ==="
             patch -p1 < "$PATCH_DIR/$p"
           done
           cp "$PATCH_DIR/btx-gbt-solve.cpp" src/btx-gbt-solve.cpp
-          echo "=== verify V2 activation height is set in solver source ==="
-          grep -n "nMatMulNonceSeedHeight = 125'000\|nMatMulNonceSeedHeight = 125000" src/btx-gbt-solve.cpp \
-            || { echo "ERROR: V2 activation height not set"; exit 1; }
+          echo "=== verify upstream v0.32.3 has V2 activation in chainparams ==="
+          grep -n "nMatMulNonceSeedHeight = 125" src/kernel/chainparams.cpp \
+            || { echo "ERROR: v0.32.3 chainparams missing V2 activation — wrong tag?"; exit 1; }
+          echo "=== verify upstream v0.32.3 has share_target_override ==="
+          grep -nE 'share_target_override' src/pow.h src/pow.cpp \
+            || { echo "ERROR: v0.32.3 missing share_target_override — wrong tag?"; exit 1; }
 
       - name: Configure cmake (Metal, no CUDA)
         working-directory: btx-src

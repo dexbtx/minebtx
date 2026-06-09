@@ -107,6 +107,11 @@ class SolverEnv:
 
     def to_env(self, base: dict[str, str] | None = None) -> dict[str, str]:
         env = dict(base) if base is not None else dict(os.environ)
+        # v0.32.3 gates CUDA on sm_80+ by default; this env var opt-in lowers
+        # the floor to sm_60 (Pascal 10xx, Turing 16xx/20xx). No-op on Ampere+.
+        # Set unconditionally — the upstream binary ignores the env var when
+        # the GPU is already supported.
+        env.setdefault("BTX_CUDA_ALLOW_OLDER_GPUS", "1")
         if self.backend is not None:
             env["BTX_MATMUL_BACKEND"] = str(self.backend)
         if self.batch_size is not None:

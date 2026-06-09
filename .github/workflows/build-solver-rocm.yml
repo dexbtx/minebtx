@@ -17,7 +17,7 @@ on:
       btx_tag:
         description: 'btxchain/btx tag/branch'
         required: true
-        default: 'v0.32.2'
+        default: 'v0.32.3'
       gfx_arches:
         description: 'AMD GPU archs (semicolon-separated)'
         required: true
@@ -34,7 +34,7 @@ on:
       release_tag:
         description: 'Release tag to attach to'
         required: true
-        default: 'btx-prebuilds-v0.32.2'
+        default: 'btx-prebuilds-v0.32.3'
 
 jobs:
   build:
@@ -86,13 +86,16 @@ jobs:
         run: |
           set -euo pipefail
           P="$GITHUB_WORKSPACE/.github/build-patches"
-          for p in 02-pow-h-share-target-override.patch \
-                   03-pow-cpp-share-target-override.patch \
-                   05-cmakelists-add-gbt-solve-target.patch; do
+          for p in 05-cmakelists-add-gbt-solve-target.patch; do
             echo "=== $p ==="; patch -p1 < "$P/$p"
           done
           cp "$P/btx-gbt-solve.cpp" src/btx-gbt-solve.cpp
-          grep -q "nMatMulNonceSeedHeight = 125'000" src/btx-gbt-solve.cpp || { echo "V2 height missing"; exit 1; }
+          # v0.32.3+: share_target_override + V2 activation are upstream;
+          # just confirm the upstream tag carries them (catches a stale tag).
+          grep -nE 'share_target_override' src/pow.h src/pow.cpp \
+            || { echo "ERROR: upstream missing share_target_override"; exit 1; }
+          grep -n "nMatMulNonceSeedHeight = 125" src/kernel/chainparams.cpp \
+            || { echo "ERROR: upstream chainparams missing V2 activation"; exit 1; }
 
       - name: Hipify cuda/ backend -> hip/ + inject CMake HIP branch
         working-directory: btx-src
