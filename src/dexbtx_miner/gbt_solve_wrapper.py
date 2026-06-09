@@ -112,6 +112,13 @@ class SolverEnv:
         # Set unconditionally — the upstream binary ignores the env var when
         # the GPU is already supported.
         env.setdefault("BTX_CUDA_ALLOW_OLDER_GPUS", "1")
+        # Post-block-125000 the matmul seed folds nTime. The solver auto-
+        # refreshes the header time mid-search (default every 4096 attempts),
+        # so a found share's digest is for a time the pool never sees -> the
+        # pool recomputes against job.time and rejects code-23. Frequent on
+        # slower rigs post-fork (more attempts/share). Disable so the solver
+        # mines the exact job header. (Parser rejects 0; max u32 = never.)
+        env.setdefault("BTX_MINER_HEADER_TIME_REFRESH_ATTEMPTS", "4294967295")
         if self.backend is not None:
             env["BTX_MATMUL_BACKEND"] = str(self.backend)
         if self.batch_size is not None:

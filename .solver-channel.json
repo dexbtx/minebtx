@@ -1,8 +1,8 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "released_at": "2026-06-09",
-  "notes": "v0.4.5 - REVERT solver to BTX v0.32.2. The v0.32.3 CUDA rewrite (GPU-side SHA-256 seed derivation + GPU pre-hash scan) regressed GPU mining post-block-125000: confirmed broken on Pascal sm_61 (daemon_ready then GPU wedges at 0%, zero results) and the likely cause of fleet-wide saturation collapse. v0.32.2's solver path (matmul kernel byte-identical to the proven v0.30.1 kernel, CPU-side V2 seed derivation, LTO) is restored. x86_64 rebuilt with sm_80 added (arches 61;75;80;86;89;90;120). Node stays v0.32.3 (consensus-equivalent; no activation-height change). All platforms now point at btx-prebuilds-v0.32.2. Wrapper auto-updates from v0.4.1+.",
+  "notes": "v0.4.6 - disable solver header-time-refresh (BTX_MINER_HEADER_TIME_REFRESH_ATTEMPTS=max). Post-block-125000 the matmul seed folds nTime; the solver's auto time-refresh (every 4096 attempts) produced shares whose digest the pool couldn't reproduce -> code-23 rejects, frequent on slower rigs post-fork. Binary UNCHANGED (BTX v0.32.2, btx-prebuilds-v0.32.2); wrapper-only fix, auto-applies on update.",
   "platforms": {
     "x86_64-linux": {
       "sha256": "bc605267a91d9840190d9b12a67354666418b989fd56138ab4fa4d924a8481a0",

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.6] - 2026-06-09 (disable solver header-time-refresh - fix code-23 rejects)
+
+### Why
+Post-block-125000 the matmul seed is derived from the full header including nTime.
+btx-gbt-solve's SolveMatMul auto-refreshes the header nTime to wall-clock after
+BTX_MINER_HEADER_TIME_REFRESH_ATTEMPTS (default 4096) attempts, but the result only
+reports nonce+digest, never the refreshed time. The wrapper then submits the original
+job ntime, so the pool recomputes the digest against a DIFFERENT time and rejects the
+share code-23 (digest >> share_target). Post-fork the ~10x per-nonce slowdown means
+rigs routinely exceed 4096 attempts before finding a share, so the refresh fires
+constantly -> heavy code-23, worst on CPU-starved/low-thread rigs.
+
+### What
+- Wrapper sets BTX_MINER_HEADER_TIME_REFRESH_ATTEMPTS=4294967295 (effectively disabled)
+  via env.setdefault, so the solver mines the exact job header and its digest matches
+  what the pool validates.
+- Solver binary UNCHANGED (still BTX v0.32.2). Wrapper-only; flows via auto-update.
+- Pool-side companion fix (validate digest against the submitted ntime, matching btxd)
+  tracked separately.
+
 ## [0.4.5] - 2026-06-09 (revert solver to BTX v0.32.2 - fix v0.32.3 GPU regression)
 
 ### Why
