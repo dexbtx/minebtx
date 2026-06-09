@@ -1,5 +1,82 @@
 # Changelog
 
+## [0.4.4] — 2026-06-09 (saturation tuning — 3.6× throughput on Pascal)
+
+### Why
+After v0.4.3 unblocked the wrapper, share rate was still well below
+theoretical: on a GTX 1070 (Pascal sm_61) the solver did ~30 kN/s at
+19% mean GPU util / 19W mean power. Lots of headroom unused. Time to
+sweep configuration.
+
+### What we found
+Direct daemon-mode bench (bypasses wrapper IPC) at the "canonical
+Pascal" config (`batch=32 prepare_workers=4 prefetch=4 solver_threads=4`)
+sat at the same 30 kN/s. So wrapper IPC isn't the bottleneck — the
+solver itself isn't saturating.
+
+12-config sweep × 30s each, then a follow-up sweep on the top
+candidate. Empirical findings on home-1070:
+
+| Knob | Effect on kN/s | Effect on GPU util |
+|---|---|---|
+| `solver_threads`: 4 → 8 | 30 → 61 (2.0×) | 19% → 27% |
+| `solver_threads`: 8 → 16 | 61 → 104 (1.7×) | 27% → 38% |
+| `solver_threads`: 16 → 24 | 104 → 108 (1.05×) | 38% → 41% |
+| `solver_threads`: 24 → 32 | regressed (CPU contention) | — |
+| `batch_size`: 32 → 128 | ~flat | ~flat |
+| `prepare_workers`: 4 → 16 | ~flat (without threads bump) | ~flat |
+| `prefetch_depth`: 4 → 16 | ~flat | ~flat |
+| `CUDA_POOL_SLOTS`, device-resident, noise-parallel | all neutral/regressive | — |
+
+**The lever is `solver_threads`.** The "Pascal sweet spot" memory was
+wrong about batch=32 / threads=4 — batch=128 / threads=24 is the
+optimum on the 1070. Modern cards retain the same shape (more solver
+parallelism feeds the kernel) so we ship one default profile.
+
+### Verified end-to-end
+5-min wrapper-driven run on home-1070 with the new config:
+- Mean GPU util: **44%** (was 32%)
+- Mean power: **82W** (was 19W)
+- Peak power: **128W** (was 47W; 1070 TDP=150W → 85% TDP load)
+- Solver CPU: **2400%** (24 cores fully saturated — system has 32, leaves
+  headroom)
+- 2 shares accepted in 300s (vs ~1/300s pre-v0.4.4)
+- Effective ~124 kN/s on the 1070
+
+### Why we stop at 44% GPU util
+- VRAM stays at 642 MiB regardless of batch_size (32, 64, 128, 256, 512,
+  1024) — kernel isn't VRAM-bound and bigger batches don't help
+- Power at 128W of 150W TDP = 85% of TDP → close to fully driving the
+  card; remaining gap is likely memory-bandwidth-bound on Pascal's
+  256-bit GDDR5 (256 GB/s)
+- Pascal sm_61 lacks tensor cores; the kernel does general FMA, not
+  tensor-core-accelerated GEMM
+- Going further requires kernel-level work (separate effort)
+
+### What changed
+- `install.sh` NVIDIA tuning: `solver_threads` now auto-scaled to
+  `min(24, nproc-4)` (was hardcoded 4); `GPU_BATCH=128 GPU_PREFETCH=8
+  GPU_WORKERS=16` for all NVIDIA cards (was a Pascal-special-case
+  batch=32 / prefetch=4 / workers=4 that was actually suboptimal).
+- No code change to the wrapper itself.
+
+### Operator impact
+- Existing operators running v0.4.1+: wrapper auto-update will fetch
+  v0.4.4 on next restart, but the binary doesn't change — only the
+  config defaults that install.sh writes on FIRST install. Existing
+  `~/.dexbtx-miner/config.yaml` files keep their (suboptimal) values
+  unless the operator re-runs install.sh with `--yes` to regenerate.
+- For the FULL gain, operators should either re-run install.sh OR
+  manually edit their `config.yaml` to set:
+  ```
+  solver_threads: 24            # or min(24, nproc-4) per their CPU
+  solver_prepare_workers: 16
+  solver_batch_size: 128
+  solver_prefetch_depth: 8
+  ```
+- Pool-server v0.8.13's notifier already points at v0.4.x — no notifier
+  bump needed (v0.4.4 falls under "you're behind, run install.sh").
+
 ## [0.4.3] — 2026-06-09 (CRITICAL: never drop stale-job-id slice results)
 
 ### The deeper bug
