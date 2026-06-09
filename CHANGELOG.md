@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.4.2] — 2026-06-09 (CRITICAL: carry nonce-progress on clean=false notify)
+
+### The bug
+On the M4 Mac fleet a tester reported throughput dropping to ~0 on the
+v0.4.0 stack. Investigation showed the pool's stratum was emitting
+`clean_jobs=true` on EVERY notify (since v0.3.39), including the ~5s
+template-rebuild cadence from mempool churn — same parent block. Pool
+side was fixed in pool-server v0.8.12. But the M4 tester saw notifies
+*correctly* coming as `clean=false` post-fix and STILL the solver's
+nonce_start was frozen across 6 consecutive notifies — never advancing
+past 704374636544.
+
+Root cause: `_on_notify` in `stratum_client.py` unconditionally did
+`self._current_job = job` regardless of `clean`. The new job's
+`matmul["nonce64_start"]` always came from the pool's broadcast, which
+is fixed per-session (extranonce1 << 32 | base_offset). So every notify
+reset the solver to the same starting nonce, even when the protocol
+said "incremental update, keep cranking."
+
+### Fix
+On `clean=false` and there's a prior `_current_job`, carry forward
+`prev._current_job.matmul["nonce64_start"]` into the new job before
+swapping. On `clean=true` (real parent-block change) the broadcast
+value stays as the reset point. One-line semantic correction; no
+schema change, no protocol change.
+
+### Operator impact
+Anyone on v0.4.0 or v0.4.1 wrapper PAIRED with the v0.32.3 solver
+binary will see throughput climb back to normal once they pick up
+v0.4.2. Auto-update (from v0.4.1 onward) handles this automatically
+on next miner restart. Operators still on ≤0.4.0 should re-run
+install.sh once to bridge.
+
+Pool-server v0.8.13 bumps `MinerUpdateNotifier`'s target to 0.4.2 so
+TG-linked operators on <0.4.2 get a fresh DM.
+
 ## [0.4.1] — 2026-06-09 (wrapper auto-self-upgrade)
 
 ### Why

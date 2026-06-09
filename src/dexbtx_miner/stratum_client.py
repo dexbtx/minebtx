@@ -331,6 +331,19 @@ class StratumClient:
         clean = bool(params[7]) if len(params) > 7 else False
         log.info("notify job=%s height_hint=prev=%s... clean=%s",
                  job.job_id, job.previousblockhash[:16], clean)
+        # v0.4.2 — on clean=false (mempool/coinbase update within the
+        # same parent block), CARRY FORWARD the solver's nonce-progress
+        # from the previous job. The pool's broadcast `nonce64_start`
+        # is fixed per-session (extranonce1<<32 | base_offset). Without
+        # this carry-over the solver restarts at the same nonce on every
+        # ~5s template rebuild and never advances. On clean=true (new
+        # parent block) we keep the broadcast value — that's a real
+        # reset signal. Throughput-zero bug verified on M4: 6 consecutive
+        # clean=false notifies all left nonce_start=704374636544.
+        if not clean and self._current_job is not None:
+            prev_start = self._current_job.matmul.get("nonce64_start")
+            if prev_start is not None:
+                job.matmul["nonce64_start"] = prev_start
         self._current_job = job
         self._job_changed.set()
 
