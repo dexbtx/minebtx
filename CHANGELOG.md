@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.5] - 2026-06-09 (revert solver to BTX v0.32.2 - fix v0.32.3 GPU regression)
+
+### Why
+The v0.32.3 solver shipped in v0.4.0-0.4.4 rewrote the CUDA path (GPU-side SHA-256
+seed derivation + GPU pre-hash scan). That rewrite regresses GPU mining post-block-
+125000 - confirmed broken on Pascal sm_61 (daemon_ready then GPU wedges at 0%, zero
+results) and the likely cause of fleet-wide saturation collapse. v0.32.2's solver
+(matmul kernel byte-identical to the proven v0.30.1 kernel, CPU-side V2 seed
+derivation, LTO) has no such regression (29.4 kN/s @ threads=4 on the same 1070
+where v0.32.3 wedged).
+
+### What
+- All platforms revert to the btx-prebuilds-v0.32.2 solver release.
+- x86_64 rebuilt to add sm_80 (arches 61;75;80;86;89;90;120), LTO on, bit-equivalent
+  (CPU & CUDA) vs ci-refvec. sha bc605267.
+- aarch64 (cuda12/cuda13), darwin-arm64 (Metal), rocm: existing v0.32.2 assets
+  (aarch64 already includes sm_80).
+- Node stays v0.32.3 (consensus-equivalent; no activation-height change). ZMQ and
+  other node features are unaffected by the solver revert.
+
 ## [0.4.4] — 2026-06-09 (saturation tuning — 3.6× throughput on Pascal)
 
 ### Why

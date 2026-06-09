@@ -1,33 +1,33 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "released_at": "2026-06-09",
-  "notes": "v0.4.1 — wrapper-side auto-self-upgrade. Wrapper checks this manifest's `version` field at startup and pip-upgrades itself + re-execs when stale (mirrors solver-binary auto-update). Binaries unchanged from v0.4.0 (BTX v0.32.3, 4 platforms). Operators on ≤0.4.0 still need ONE re-run of install.sh (or pip install --upgrade) to land on v0.4.1; from v0.4.1 onward wrapper updates flow automatically.",
+  "notes": "v0.4.5 - REVERT solver to BTX v0.32.2. The v0.32.3 CUDA rewrite (GPU-side SHA-256 seed derivation + GPU pre-hash scan) regressed GPU mining post-block-125000: confirmed broken on Pascal sm_61 (daemon_ready then GPU wedges at 0%, zero results) and the likely cause of fleet-wide saturation collapse. v0.32.2's solver path (matmul kernel byte-identical to the proven v0.30.1 kernel, CPU-side V2 seed derivation, LTO) is restored. x86_64 rebuilt with sm_80 added (arches 61;75;80;86;89;90;120). Node stays v0.32.3 (consensus-equivalent; no activation-height change). All platforms now point at btx-prebuilds-v0.32.2. Wrapper auto-updates from v0.4.1+.",
   "platforms": {
     "x86_64-linux": {
-      "sha256": "dcef2c8180b621003053fbc1a7dc58275a2f81794dd405d5b10bc1bad6bb8cd9",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.3/btx-gbt-solve",
+      "sha256": "bc605267a91d9840190d9b12a67354666418b989fd56138ab4fa4d924a8481a0",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
-      "notes": "GCC 11.4, CUDA 12.8, archs sm_61;sm_75;sm_86;sm_89;sm_90;sm_120. LTO enabled. Built on home-1070 + verified bit-equivalent vs ci-refvec."
+      "notes": "BTX v0.32.2 + pool patches. CUDA 12.8, archs sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120. LTO enabled. Rebuilt on home-1070, bit-equivalent (CPU & CUDA sm_61) vs ci-refvec."
     },
     "aarch64-linux": {
-      "sha256": "81f3afb9925785390cbcf866a609834140e94e2852d8b15d816854e93a35daa4",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.3/btx-gbt-solve-aarch64-linux-gnu-cuda13",
+      "sha256": "ca63e161c78c7dd8fe6ba2d302a119424fe23813c8e332b1b05a71e938feb5c1",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-aarch64-linux-gnu-cuda13",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
       "notes": "Default aarch64-linux entry. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer. Requires CUDA 13.0+ runtime."
     },
     "aarch64-linux-cuda12": {
-      "sha256": "31053d9c9e218306fc4359d772805d7487016bf11eee85232e234fa11eae3355",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.3/btx-gbt-solve-aarch64-linux-gnu-cuda12",
+      "sha256": "a69357152702a75a6e96fadfe4aed5c7e34e704754fe4053a4bf0c2998626819",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-aarch64-linux-gnu-cuda12",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
-      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 \u2014 use cuda13 build for GB10)."
+      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 — use cuda13 build for GB10)."
     },
     "arm64-darwin": {
-      "sha256": "7c7df327be60fc531eef12cc3890fe1fcd80a53fa4672afdffb3fc2345c45dbe",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.3/btx-gbt-solve-darwin-arm64",
+      "sha256": "6d773b8b4e74d5b538102c24f67503004c407d555d0201636632d93a05f6516a",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-darwin-arm64",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
       "notes": "Apple Silicon Metal backend. CI verifies cpu_digest == metal_digest == reference_digest before publish."
