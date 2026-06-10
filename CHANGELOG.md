@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.4.7] - 2026-06-11 (GPU saturation: PR#58 kernel opts + C4 continuous feeding)
+
+### Why
+Post-fork (v0.32) the per-nonce matmul seeds force a full n^3 digest recompute per
+share, and the GPU-nonce-seed scan path disables the parallel solver, so NVIDIA rigs
+(all on WSL) ran at 5-15% of card power -- bursty feeding idles the clock to P8/~9W.
+Two stacked causes: (1) slow / low-power-density CUDA kernels; (2) the solver
+early-exiting on the FIRST share each slice, starving the GPU between bursts.
+
+### What
+- Kernel layer (PR #58, byte-exact; verified locally on Pascal sm_61 = 5.4x, author
+  on 5090 = ~3x): windowed SHA-256 in scanner + matrix-gen, per-template/per-seed SHA
+  midstates, single-block digest reduction, and factored compression (n^3 -> ~n^2
+  MACs). Added as build-patches 10/11 (src/cuda/oracle_accel.cu, matmul_accel.cu),
+  applied in the CUDA (aarch64) and ROCm builds. Verified byte-identical nonce /
+  matmul_digest / full-C vs the unpatched binary on a post-125000 V2 job.
+- C4 layer (continuous GPU feeding):
+  - Solver build-patch (btx-gbt-solve.cpp): RunOneJob now LOOPS SolveMatMul,
+    collecting ALL shares in the slice (new shares[] + share_count; first share still
+    mirrored at top level for back-compat) instead of returning to the host on the
+    first hit -- removes the per-share stdin round-trip so the GPU stays fed.
+  - Wrapper (stratum_client.py): submit every share from shares[], firing each
+    _submit_share as a background asyncio task so a slice-worth of submits never
+    starves the daemon.
+- Measured on home-1070 (GTX 1070, WSL): 9W/P8 -> P2, 120-126W peaks, ~40% util
+  (98% spikes), 0 rejects, 0 tracebacks. Remaining host-side bounce to full 99%
+  saturation is tracked as C2 (GPU-side scan compaction).
+- Source / build-patch only. The x86_64-linux release binary and the
+  .solver-channel.json / install.sh tag bumps are a SEPARATE, gated release step --
+  no fleet auto-update is triggered by this commit.
+
 ## [0.4.6] - 2026-06-09 (disable solver header-time-refresh - fix code-23 rejects)
 
 ### Why

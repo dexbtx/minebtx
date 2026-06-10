@@ -463,7 +463,32 @@ class StratumClient:
                             job.job_id,
                             self._current_job.job_id if self._current_job else "(none)",
                         )
-                    await self._submit_share(job, result)
+                    # C4: the solver now returns ALL shares found in the slice
+                    # (raw_output["shares"]); submit each so none are wasted.
+                    _shs = (result.raw_output or {}).get("shares")
+                    if _shs:
+                        for _s in _shs:
+                            try:
+                                _n = int(_s.get("nonce64"))
+                            except (TypeError, ValueError):
+                                continue
+                            # Fire submissions in the background so the daemon
+                            # is not starved while we submit a slice-worth of
+                            # shares. Keep a ref so the task is not GC'd.
+                            _st = getattr(self, "_submit_tasks", None)
+                            if _st is None:
+                                _st = set()
+                                self._submit_tasks = _st
+                            _t = asyncio.create_task(self._submit_share(job, SolveResult(
+                                found=True, tries_used=0, elapsed_s=0.0,
+                                nonce=_n, digest_hex=_s.get("matmul_digest"),
+                                ntime=result.ntime, raw_output=_s,
+                                is_block=bool(_s.get("is_block", False)),
+                            )))
+                            _st.add(_t)
+                            _t.add_done_callback(_st.discard)
+                    else:
+                        await self._submit_share(job, result)
                 # Compute the next nonce_start. Patched solver emits
                 # `nonce64_end` always — canonical "where to resume".
                 # tries_used under-counts by orders of magnitude and

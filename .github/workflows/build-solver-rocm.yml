@@ -86,7 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           P="$GITHUB_WORKSPACE/.github/build-patches"
-          for p in 05-cmakelists-add-gbt-solve-target.patch; do
+          for p in 05-cmakelists-add-gbt-solve-target.patch 10-pr58-oracle-accel-windowed-sha.patch 11-pr58-matmul-accel-factored-compression.patch; do
             echo "=== $p ==="; patch -p1 < "$P/$p"
           done
           cp "$P/btx-gbt-solve.cpp" src/btx-gbt-solve.cpp

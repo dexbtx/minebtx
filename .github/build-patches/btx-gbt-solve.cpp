@@ -289,9 +289,58 @@ bool RunOneJob(Options& options, const Consensus::Params& consensus)
     const auto start = std::chrono::steady_clock::now();
     uint64_t tries_budget = options.max_tries;
     const uint256* share_target_ptr = options.share_target ? &(*options.share_target) : nullptr;
-    const bool found = SolveMatMul(header, consensus, tries_budget,
-                                   options.block_height, &abort_flag, &matrix_c_data,
-                                   share_target_ptr);
+    const auto block_target = DeriveTarget(options.bits, consensus.powLimit);
+
+    // C4 fix: collect ALL shares in this slice instead of returning on the
+    // first one. Looping SolveMatMul *inside* the daemon (no host round-trip /
+    // stdin read between shares) keeps the GPU continuously fed — that is the
+    // saturation fix. Bounded by the max_seconds watchdog (abort_flag),
+    // max_tries, or nonce64 overflow. Per-share matrix_c is emitted only for
+    // block-tier hits (share-tier submits are digest-only, per the protocol).
+    UniValue shares(UniValue::VARR);
+    bool have_first = false;
+    uint64_t first_nonce = 0;
+    std::string first_digest;
+    bool first_is_block = false;
+    std::string first_matrix_hex;
+    uint64_t first_matrix_words = 0;
+    while (!abort_flag.load(std::memory_order_relaxed) && tries_budget > 0) {
+        matrix_c_data.clear();
+        header.matmul_digest.SetNull();
+        const bool found_one = SolveMatMul(header, consensus, tries_budget,
+                                           options.block_height, &abort_flag,
+                                           &matrix_c_data, share_target_ptr);
+        if (!found_one) break;
+        const std::string dg = header.matmul_digest.GetHex();
+        const bool is_block = block_target
+            ? UintToArith256(header.matmul_digest) <= *block_target
+            : false;
+        std::string mhex;
+        uint64_t mwords = 0;
+        if (is_block) {
+            mhex = HexBytesLE32(matrix_c_data);
+            mwords = static_cast<uint64_t>(matrix_c_data.size());
+        }
+        UniValue sh(UniValue::VOBJ);
+        sh.pushKV("nonce64", header.nNonce64);
+        sh.pushKV("matmul_digest", dg);
+        sh.pushKV("is_block", is_block);
+        if (is_block) {
+            sh.pushKV("matrix_c_data_hex", mhex);
+            sh.pushKV("matrix_c_data_words", mwords);
+        }
+        shares.push_back(sh);
+        if (!have_first) {
+            have_first = true;
+            first_nonce = header.nNonce64;
+            first_digest = dg;
+            first_is_block = is_block;
+            first_matrix_hex = mhex;
+            first_matrix_words = mwords;
+        }
+        if (header.nNonce64 == UINT64_MAX) break;
+        header.nNonce64 += 1;
+    }
     const auto stop = std::chrono::steady_clock::now();
     const double elapsed_s = std::chrono::duration<double>(stop - start).count();
     const uint64_t tries_used = options.max_tries - tries_budget;
@@ -299,21 +348,24 @@ bool RunOneJob(Options& options, const Consensus::Params& consensus)
     abort_flag.store(true, std::memory_order_relaxed);
     if (watchdog.joinable()) watchdog.join();
 
+    const size_t n_shares = shares.size();
     UniValue out(UniValue::VOBJ);
-    out.pushKV("found", found);
+    out.pushKV("found", n_shares > 0);
+    out.pushKV("share_count", static_cast<uint64_t>(n_shares));
+    out.pushKV("shares", shares);
     out.pushKV("tries_used", tries_used);
     out.pushKV("elapsed_s", elapsed_s);
     out.pushKV("nonce64_end", header.nNonce64);
-    if (found) {
-        out.pushKV("nonce64", header.nNonce64);
-        out.pushKV("matmul_digest", header.matmul_digest.GetHex());
-        out.pushKV("matrix_c_data_hex", HexBytesLE32(matrix_c_data));
-        out.pushKV("matrix_c_data_words", static_cast<uint64_t>(matrix_c_data.size()));
-        const auto block_target = DeriveTarget(options.bits, consensus.powLimit);
-        const bool is_block = block_target
-            ? UintToArith256(header.matmul_digest) <= *block_target
-            : false;
-        out.pushKV("is_block", is_block);
+    if (n_shares > 0) {
+        // Backward-compat: surface the FIRST share at top level so existing
+        // one-share wrappers keep working unchanged.
+        out.pushKV("nonce64", first_nonce);
+        out.pushKV("matmul_digest", first_digest);
+        out.pushKV("is_block", first_is_block);
+        if (first_is_block) {
+            out.pushKV("matrix_c_data_hex", first_matrix_hex);
+            out.pushKV("matrix_c_data_words", first_matrix_words);
+        }
     } else {
         std::string reason{"max_tries_exhausted"};
         if (abort_flag.load() && options.max_seconds > 0.0 && elapsed_s >= options.max_seconds) {
@@ -323,7 +375,7 @@ bool RunOneJob(Options& options, const Consensus::Params& consensus)
     }
 
     std::cout << out.write() << std::endl;
-    return found;
+    return n_shares > 0;
 }
 
 // Parse a JSON job payload (one line, per the protocol in PrintUsage) and

@@ -100,8 +100,8 @@ jobs:
           echo "Patches available:"
           ls -la "$PATCH_DIR"
 
-          # Apply each upstream-file patch (just 05 since v0.32.3)
-          for p in 05-cmakelists-add-gbt-solve-target.patch; do
+          # Apply upstream-file patches: 05 (cmake target) + 10/11 (PR#58 kernel opts)
+          for p in 05-cmakelists-add-gbt-solve-target.patch 10-pr58-oracle-accel-windowed-sha.patch 11-pr58-matmul-accel-factored-compression.patch; do
             echo "=== applying $p ==="
             patch -p1 < "$PATCH_DIR/$p"
           done
