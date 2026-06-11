@@ -6,9 +6,14 @@ canonical CUDA kernel + pre-loaded cubins for the duration of the session
 (eliminating per-slice CUDA-context-init cost).
 """
 
-__version__ = "0.4.6"
+# MUST BE BUMPED IN LOCKSTEP WITH pyproject.toml's [project].version AND with
+# .solver-channel.json's "version" field. The wrapper_updater compares this
+# constant against the manifest's "version" to decide whether to self-upgrade —
+# if you bump pyproject.toml + channel.json but forget to bump THIS, every
+# operator's wrapper_updater will infinite-loop installing the same tarball
+# (it never sees __version__ catch up). See v0.4.8 CHANGELOG for the incident.
+__version__ = "0.4.8"
 # Single source of truth for the User-Agent string sent in mining.subscribe.
-# Keep this synced with pyproject.toml's [project].version on every release.
 USER_AGENT = f"dexbtx-miner/{__version__}"
 
 # Capability strings declared by this miner in `mining.subscribe`. The pool

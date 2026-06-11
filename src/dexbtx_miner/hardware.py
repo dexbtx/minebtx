@@ -8,12 +8,14 @@ than failing the connection.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import platform
 import re
 import subprocess
+import time
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -646,8 +648,19 @@ def _read_stat() -> tuple[int, ...] | None:
         return None
 
 
+_GPU_SAMPLE_COUNT = 4   # samples per metrics call
+_GPU_SAMPLE_INTERVAL_S = 0.5   # ~2 s window total
+
+
 def _gpu_runtime() -> list[dict[str, Any]]:
-    """Per-GPU runtime metrics: util%, power_w, temp_c, uuid."""
+    """Per-GPU runtime metrics: util%, power_w, temp_c, uuid.
+
+    Multi-samples nvidia-smi over a ~2 s window and averages util_pct + power_w.
+    Single-snapshot is unsuited to bursty mining workloads — on Pascal post-fork
+    the matmul scan kernel runs for ~3 s then the host iterates flags briefly;
+    one instantaneous sample lands in the inter-scan gap ~80% of the time,
+    underreporting both util and power. The 2 s window catches at least one
+    in-kernel sample on any realistic mining cadence."""
     if platform.system() == "Darwin":
         # Match the static gpu_uuid so the dashboard associates this worker's
         # GPU. Per-GPU util/power on Apple Silicon needs `powermetrics` (root),
@@ -657,30 +670,47 @@ def _gpu_runtime() -> list[dict[str, Any]]:
             return []
         return [{"gpu_uuid": gpus[0]["gpu_uuid"], "util_pct": None,
                  "power_w": None, "temp_c": None}]
-    rows = _nvidia_query("uuid,utilization.gpu,power.draw,temperature.gpu")
+
+    # Multi-sample NVIDIA over ~2 s. Index by uuid (multi-GPU safe), accumulate
+    # util/power sums + sample counts, take the latest temp_c.
+    accum: dict[str, dict[str, Any]] = {}
+    counts: dict[str, int] = {}
+    for i in range(_GPU_SAMPLE_COUNT):
+        rows = _nvidia_query("uuid,utilization.gpu,power.draw,temperature.gpu")
+        for r in rows:
+            if len(r) < 4:
+                continue
+            uuid, util, power, temp = r[:4]
+            d = accum.setdefault(uuid, {"util_sum": 0.0, "util_n": 0,
+                                        "power_sum": 0.0, "power_n": 0,
+                                        "temp_c": None})
+            try:
+                d["util_sum"] += float(util); d["util_n"] += 1
+            except ValueError:
+                pass
+            try:
+                d["power_sum"] += float(power); d["power_n"] += 1
+            except ValueError:
+                pass
+            try:
+                d["temp_c"] = int(float(temp))
+            except ValueError:
+                pass
+            counts[uuid] = counts.get(uuid, 0) + 1
+        if i < _GPU_SAMPLE_COUNT - 1:
+            time.sleep(_GPU_SAMPLE_INTERVAL_S)
+
     out = []
-    for r in rows:
-        if len(r) < 4:
-            continue
-        uuid, util, power, temp = r[:4]
-        try:
-            util_pct = int(float(util))
-        except ValueError:
-            util_pct = None
-        try:
-            power_w = round(float(power), 1)
-        except ValueError:
-            power_w = None
-        try:
-            temp_c = int(float(temp))
-        except ValueError:
-            temp_c = None
+    for uuid, d in accum.items():
+        util_pct = int(d["util_sum"] / d["util_n"]) if d["util_n"] else None
+        power_w = round(d["power_sum"] / d["power_n"], 1) if d["power_n"] else None
         out.append({
             "gpu_uuid": uuid,
             "util_pct": util_pct,
             "power_w": power_w,
-            "temp_c": temp_c,
+            "temp_c": d["temp_c"],
         })
+
     if not out:
         # AMD/ROCm host: report the static uuid so the dashboard associates the
         # GPU. (Per-GPU util/power parsing from rocm-smi is left for later.)
@@ -691,24 +721,52 @@ def _gpu_runtime() -> list[dict[str, Any]]:
     return out
 
 
+def solver_sha256_hex(solver_path: str | None) -> str | None:
+    """sha256 of the installed solver binary, or None if not readable.
+    Used to populate the cohort field so the pool can group workers by the
+    exact solver build they're running (canary vs stable A/B)."""
+    if not solver_path:
+        return None
+    try:
+        h = hashlib.sha256()
+        with open(solver_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
 def collect_runtime_metrics(
     session_id: str,
     solver_nps: float | None,
     shares_session_total: int,
+    *,
+    wrapper_version: str | None = None,
+    solver_sha256: str | None = None,
+    solver_backend: str | None = None,
 ) -> dict[str, Any]:
     """Build a `worker.report_metrics` params payload (sent every 60s).
 
     `solver_nps` is the miner's last-known nonces-per-second figure
     (self-reported by the solver). Caller passes None if unknown.
+
+    `wrapper_version`, `solver_sha256`, `solver_backend` are the H2/H3 cohort
+    keys (pool migration 20260611030000). They let `/api/fleet` group workers
+    into canary-vs-stable cohorts by the exact build they're running. Older
+    pool servers ignore the extra fields gracefully.
     """
     return {
         "session_id": session_id,
-        "timestamp": int(__import__("time").time()),
+        "timestamp": int(time.time()),
         "cpu_util_pct": _cpu_util_pct(),
         "ram_gb_used": _ram_gb_used(),
         "gpus": _gpu_runtime(),
         "solver_nps": solver_nps,
         "shares_session_total": shares_session_total,
+        "wrapper_version": wrapper_version,
+        "solver_sha256": solver_sha256,
+        "solver_backend": solver_backend,
     }
 
 

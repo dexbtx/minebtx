@@ -24,6 +24,8 @@ import time
 import uuid as _uuid
 from typing import Any
 
+from . import __version__ as _wrapper_version
+
 from . import canonical_names, hardware
 from .config import MinerConfig, fully_qualified_worker
 from .gbt_solve_wrapper import (
@@ -142,6 +144,18 @@ class StratumClient:
         self._job_changed = asyncio.Event()
         self._extranonce1 = ""
         self._extranonce2_size = 4
+        # H2/H3 cohort fields — computed once at session create and cached.
+        # The pool's /api/fleet groups workers by these (canary vs stable A/B).
+        # solver_sha256 changes only when the auto-updater swaps the binary
+        # (which forces a process restart), so caching is safe.
+        # NOTE: read __version__ directly from the package, not via
+        # importlib.metadata.version() — the metadata lookup picked up a
+        # stale dist-info from an unrelated install during v0.4.8 testing
+        # and reported '0.3.0' on a rig running 0.4.8. The constant is the
+        # only canonical source.
+        self._wrapper_version = _wrapper_version
+        self._solver_sha256 = hardware.solver_sha256_hex(cfg.gbt_solve_path)
+        self._solver_backend = cfg.solver_backend
         self._difficulty = 1.0
         self._solver_task: asyncio.Task | None = None
         self._metrics_task: asyncio.Task | None = None
@@ -575,6 +589,9 @@ class StratumClient:
                     session_id=self._session_id,
                     solver_nps=solver_nps,
                     shares_session_total=self.shares_accepted + self.shares_rejected,
+                    wrapper_version=self._wrapper_version,
+                    solver_sha256=self._solver_sha256,
+                    solver_backend=self._solver_backend,
                 )
                 # Notify-style call: don't await a result (some pools reply,
                 # some don't; we don't care for periodic telemetry).

@@ -1,5 +1,79 @@
 # Changelog
 
+## [0.4.8] - 2026-06-11 (Accurate telemetry + v0.4.7 upgrade-loop hotfix)
+
+### Why (telemetry)
+The dashboard was showing newly-upgraded v0.4.7 / v0.32.5 rigs as "Below saturation
+— likely host or config bottleneck" even though they were running at 98% GPU util /
+~135W. Two bugs in the wrapper's `worker.report_metrics`:
+
+1. **Single-snapshot GPU sampling.** `_gpu_runtime()` called `nvidia-smi --query-gpu`
+   once per metrics tick. Post-fork mining is bursty (scan kernel runs ~3 s, then
+   the host iterates flags briefly). A single instantaneous sample lands in the
+   inter-scan gap ~80% of the time on Pascal, underreporting util to 2 % and power
+   to the idle floor (~42 W). The dashboard then averaged ten of these bad samples
+   over 10 min and triggered the "host bottleneck" recommendation.
+2. **H2/H3 cohort fields not populated.** The pool's f55c7f6 migration added
+   `wrapper_version` / `solver_sha256` / `solver_backend` to `worker_metrics` for
+   the canary-vs-stable A/B cohort view, but the wrapper wasn't sending them, so
+   `/api/fleet` couldn't tell which workers had upgraded.
+
+### What
+- `hardware._gpu_runtime()` now multi-samples nvidia-smi 4x over a ~2 s window and
+  averages `util_pct` + `power_w` (temp_c is taken from the latest sample). Catches
+  at least one in-kernel sample on any realistic post-fork mining cadence. Single-
+  GPU adds ~2 s to each 60 s metrics tick; multi-GPU is the same because all rows
+  return from one nvidia-smi call.
+- `hardware.collect_runtime_metrics()` now accepts `wrapper_version`,
+  `solver_sha256`, and `solver_backend` keyword args and includes them in the
+  payload (older pool servers ignore the extra fields gracefully).
+- `hardware.solver_sha256_hex(path)` helper — reads the installed solver binary
+  and returns its sha256. Called once at `StratumClient.__init__`.
+- `StratumClient` caches the three cohort fields at init (computed once per
+  process — solver sha256 only changes when the auto-updater swaps the binary,
+  which forces a restart) and passes them on every `report_metrics`.
+
+### Why (v0.4.7 upgrade loop hotfix)
+The v0.4.7 release shipped with `__init__.py.__version__ = "0.4.6"` — the constant
+was never bumped alongside pyproject.toml or .solver-channel.json. The wrapper
+auto-updater reads `__init__.py.__version__` to decide whether to upgrade. After
+`pip install`ing the v0.4.7 tarball it would re-exec, see __version__ still as
+"0.4.6" (because the tarball also had "0.4.6"), and re-trigger the upgrade —
+infinite loop. The loop-protection guard in `wrapper_updater.maybe_self_upgrade()`
+only catches loops where the NEW package's __version__ >= target; with the version
+stuck below target on every tarball, the guard never fires.
+
+This v0.4.8 release bumps `__init__.py.__version__` to "0.4.8" (in lockstep with
+pyproject.toml and channel.json) AND adds a comment in `__init__.py` warning
+future bumpers about the three-place lockstep. Stuck v0.4.7 operators automatically
+escape on their next iteration cycle (they upgrade to v0.4.8, see matching
+__version__, comparison succeeds, mining starts normally).
+
+### What
+- `hardware._gpu_runtime()` now multi-samples nvidia-smi 4x over a ~2 s window and
+  averages `util_pct` + `power_w` (temp_c is taken from the latest sample). Catches
+  at least one in-kernel sample on any realistic post-fork mining cadence. Single-
+  GPU adds ~2 s to each 60 s metrics tick; multi-GPU is the same because all rows
+  return from one nvidia-smi call.
+- `hardware.collect_runtime_metrics()` now accepts `wrapper_version`,
+  `solver_sha256`, and `solver_backend` keyword args and includes them in the
+  payload (older pool servers ignore the extra fields gracefully).
+- `hardware.solver_sha256_hex(path)` helper — reads the installed solver binary
+  and returns its sha256. Called once at `StratumClient.__init__`.
+- `StratumClient` caches the three cohort fields at init (computed once per
+  process — solver sha256 only changes when the auto-updater swaps the binary,
+  which forces a restart) and passes them on every `report_metrics`.
+- `__init__.py.__version__` bumped to "0.4.8" + comment block warning future
+  bumpers about the three-place lockstep (pyproject.toml, __init__.py,
+  .solver-channel.json).
+
+### Effect on dashboard
+- Rigs running v0.4.8 will report realistic util/power averages within the first
+  metrics cycle (60 s after restart).
+- `/api/fleet` cohort grouping starts populating for v0.4.8 rigs, enabling
+  canary-vs-stable A/B views by exact solver build.
+- Bit-for-bit unchanged on the mining / share-submission path. Telemetry-only.
+
 ## [0.4.7] - 2026-06-11 (GPU saturation: PR#58 kernel opts + C4 continuous feeding)
 
 ### Why

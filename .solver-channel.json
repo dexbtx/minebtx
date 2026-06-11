@@ -1,8 +1,8 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "released_at": "2026-06-11",
-  "notes": "v0.4.7 - GPU saturation: PR58 kernel optimizations (~5.4x on Pascal, ~3x on 5090, byte-exact factored math) + C4 continuous-feed RunOneJob (collect all shares per slice). x86_64-linux bumped to btx-prebuilds-v0.32.5; aarch64-linux/aarch64-linux-cuda12/arm64-darwin remain on v0.32.2 pending their respective builds. KAT-verified bit-equivalent to internal ship-base 147e59f7 (12/12 shares match).",
+  "notes": "v0.4.8 - hotfix on top of v0.4.7. (1) Accurate telemetry: multi-samples GPU stats over a ~2s window (single-snapshot was reporting Pascal at 2%/42W during real 98%/135W mining) + populates wrapper_version/solver_sha256/solver_backend cohort fields for /api/fleet. (2) Resolves the v0.4.7 upgrade loop where __init__.py.__version__ was never bumped above '0.4.6', so the wrapper auto-updater kept re-installing v0.4.7 every restart. The mining/share-submission path is bit-for-bit unchanged from v0.4.7 (telemetry + bookkeeping only). Solver channel (btx-prebuilds-v0.32.5 for x86_64-linux) is unchanged from v0.4.7.",
   "platforms": {
     "x86_64-linux": {
       "sha256": "e0505f848c4561496014f09ad5e5b267f8244723af46dccfac44f269785cbae3",
