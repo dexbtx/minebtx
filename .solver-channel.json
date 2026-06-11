@@ -1,15 +1,15 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.6",
-  "released_at": "2026-06-09",
-  "notes": "v0.4.6 - disable solver header-time-refresh (BTX_MINER_HEADER_TIME_REFRESH_ATTEMPTS=max). Post-block-125000 the matmul seed folds nTime; the solver's auto time-refresh (every 4096 attempts) produced shares whose digest the pool couldn't reproduce -> code-23 rejects, frequent on slower rigs post-fork. Binary UNCHANGED (BTX v0.32.2, btx-prebuilds-v0.32.2); wrapper-only fix, auto-applies on update.",
+  "version": "0.4.7",
+  "released_at": "2026-06-11",
+  "notes": "v0.4.7 - GPU saturation: PR58 kernel optimizations (~5.4x on Pascal, ~3x on 5090, byte-exact factored math) + C4 continuous-feed RunOneJob (collect all shares per slice). x86_64-linux bumped to btx-prebuilds-v0.32.5; aarch64-linux/aarch64-linux-cuda12/arm64-darwin remain on v0.32.2 pending their respective builds. KAT-verified bit-equivalent to internal ship-base 147e59f7 (12/12 shares match).",
   "platforms": {
     "x86_64-linux": {
-      "sha256": "bc605267a91d9840190d9b12a67354666418b989fd56138ab4fa4d924a8481a0",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve",
+      "sha256": "e0505f848c4561496014f09ad5e5b267f8244723af46dccfac44f269785cbae3",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.5/btx-gbt-solve",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
-      "notes": "BTX v0.32.2 + pool patches. CUDA 12.8, archs sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120. LTO enabled. Rebuilt on home-1070, bit-equivalent (CPU & CUDA sm_61) vs ci-refvec."
+      "notes": "BTX v0.32.5 + PR58 GPU saturation kernels (byte-exact factored math, ~5.4x Pascal/~3x 5090) + C4 continuous-feed RunOneJob. CUDA 12.8, archs sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120. LTO enabled. Built on home-1070, KAT-verified bit-equivalent (12/12 shares) vs internal ship-base 147e59f7."
     },
     "aarch64-linux": {
       "sha256": "ca63e161c78c7dd8fe6ba2d302a119424fe23813c8e332b1b05a71e938feb5c1",

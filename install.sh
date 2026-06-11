@@ -52,8 +52,8 @@ set -euo pipefail
 # ─── Configurables ──────────────────────────────────────────────────────────
 # Pin the prebuilds release tag. install.sh always pulls this version.
 # Bump in lockstep with experiments/vast/prebuilds and pyproject.toml.
-PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.2}"
-EXPECTED_SHA256="${EXPECTED_SHA256:-bc605267a91d9840190d9b12a67354666418b989fd56138ab4fa4d924a8481a0}"
+PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.5}"
+EXPECTED_SHA256="${EXPECTED_SHA256:-e0505f848c4561496014f09ad5e5b267f8244723af46dccfac44f269785cbae3}"
 # Darwin arm64 (Apple Silicon + Metal) solver pin. Fill in after the first green
 # build-solver-macos-arm64 CI run (the workflow prints the sha256). Until then,
 # macOS installs intentionally fail rather than install an unverified binary.
