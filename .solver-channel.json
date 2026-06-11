@@ -1,8 +1,8 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.10",
+  "version": "0.4.11",
   "released_at": "2026-06-11",
-  "notes": "v0.4.10 - hotfix on top of v0.4.9. The v0.4.8/0.4.9 multi-sample GPU stats were running inline on the asyncio loop; blocking the loop for the ~2s sample window stalled solver-stdout reads, the solver pipe-filled and paused, the GPU went idle DURING the sample, and the wrapper reported the stall it caused (~2% util / ~44W). Fix: collect_runtime_metrics now runs in a thread executor so the event loop keeps draining solver I/O during sampling. Verified on home-1070 canary: first post-fix metric tick read util=98 / power=110W matching live nvidia-smi, dashboard recommendation flipped from Below saturation to Optimal. Solver channel (btx-prebuilds-v0.32.5 for x86_64-linux) is unchanged from v0.4.7.",
+  "notes": "v0.4.11 - aarch64-linux + aarch64-linux-cuda12 now point at btx-prebuilds-v0.32.5 (Grace/Graviton/GB10/Spark rigs get the same PR58+C4 throughput win the x86_64 fleet got at v0.4.7). Built via the build-solver-aarch64.yml workflow on GitHub's ubuntu-24.04-arm runner from btxchain/btx v0.32.5 with patches 05+10+11. arm64-darwin entry still on v0.32.2 pending Apple Silicon rebuild. No code changes from v0.4.10; manifest-only update.",
   "platforms": {
     "x86_64-linux": {
       "sha256": "e0505f848c4561496014f09ad5e5b267f8244723af46dccfac44f269785cbae3",
@@ -12,18 +12,18 @@
       "notes": "BTX v0.32.5 + PR58 GPU saturation kernels (byte-exact factored math, ~5.4x Pascal/~3x 5090) + C4 continuous-feed RunOneJob. CUDA 12.8, archs sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120. LTO enabled. Built on home-1070, KAT-verified bit-equivalent (12/12 shares) vs internal ship-base 147e59f7."
     },
     "aarch64-linux": {
-      "sha256": "ca63e161c78c7dd8fe6ba2d302a119424fe23813c8e332b1b05a71e938feb5c1",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-aarch64-linux-gnu-cuda13",
+      "sha256": "462551244c5a8a05bde294e2102baaecbbf77f5f9ee31aad76e6e9a34ade3a10",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.5/btx-gbt-solve-aarch64-linux-gnu-cuda13",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
-      "notes": "Default aarch64-linux entry. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer. Requires CUDA 13.0+ runtime."
+      "notes": "BTX v0.32.5 + PR58 GPU saturation kernels + C4 continuous-feed RunOneJob. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer. Requires CUDA 13.0+ runtime. Built via build-solver-aarch64.yml on GitHub ubuntu-24.04-arm. KAT-equivalent to x86_64 build by construction (same source + same patches); not GPU-tested on aarch64 host because GitHub runners have no GPU."
     },
     "aarch64-linux-cuda12": {
-      "sha256": "a69357152702a75a6e96fadfe4aed5c7e34e704754fe4053a4bf0c2998626819",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-aarch64-linux-gnu-cuda12",
+      "sha256": "409aa27aecea8ca389b4afd0b625f866b457a8aef82255ccac87bd53bcb62c57",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.5/btx-gbt-solve-aarch64-linux-gnu-cuda12",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
-      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 — use cuda13 build for GB10)."
+      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. BTX v0.32.5 + PR58 + C4. CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 — use cuda13 build for GB10). Built via build-solver-aarch64.yml on GitHub ubuntu-24.04-arm."
     },
     "arm64-darwin": {
       "sha256": "6d773b8b4e74d5b538102c24f67503004c407d555d0201636632d93a05f6516a",

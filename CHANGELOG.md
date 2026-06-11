@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.11] - 2026-06-11 (aarch64-linux + aarch64-linux-cuda12 → btx-prebuilds-v0.32.5)
+
+### What
+- `.solver-channel.json` aarch64-linux entry: sha → `462551244c5a8a05bde294e2102baaecbbf77f5f9ee31aad76e6e9a34ade3a10`, url → btx-prebuilds-v0.32.5/btx-gbt-solve-aarch64-linux-gnu-cuda13. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121 (Grace + Blackwell, including GB10/Spark).
+- `.solver-channel.json` aarch64-linux-cuda12 entry: sha → `409aa27aecea8ca389b4afd0b625f866b457a8aef82255ccac87bd53bcb62c57`, url → btx-prebuilds-v0.32.5/btx-gbt-solve-aarch64-linux-gnu-cuda12. CUDA 12.8, archs sm_80;sm_90;sm_120.
+- arm64-darwin entry unchanged (still on btx-prebuilds-v0.32.2 pending Apple Silicon rebuild).
+- Both aarch64 binaries built via `.github/workflows/build-solver-aarch64.yml` on GitHub's `ubuntu-24.04-arm` runner from `btxchain/btx` tag `v0.32.5`, applying patches `05-cmakelists-add-gbt-solve-target.patch` + `10-pr58-oracle-accel-windowed-sha.patch` + `11-pr58-matmul-accel-factored-compression.patch`. cmake flags match the x86_64 ship build (Release + LTO + the relevant CUDA_ARCHITECTURES for each variant).
+- KAT-equivalent to the x86_64 build **by construction** (identical source tree, identical patches, identical compiler flags except architecture targets). Not GPU-tested on an aarch64 host because the GitHub runner has no GPU; first aarch64 operator that picks this up via solver_updater will be the first runtime validation.
+
+### Why
+The v0.32.5 channel notes said "aarch64 builds pending." Closing the loop so Grace + Graviton + GB10/Spark operators get the same PR58+C4 throughput win that x86_64 got at v0.4.7. Manifest-only update; wrapper code is byte-identical to v0.4.10.
+
 ## [0.4.10] - 2026-06-11 (Telemetry sampling no longer stalls the solver it's measuring)
 
 ### Why
