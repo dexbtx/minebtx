@@ -582,16 +582,26 @@ class StratumClient:
         # Initial offset: stagger across miners so the pool doesn't get
         # synchronized spikes from a large fleet upgrading at the same time.
         await asyncio.sleep(random.uniform(5.0, METRICS_REPORT_INTERVAL_SEC))
+        loop = asyncio.get_running_loop()
         while True:
             try:
                 solver_nps = getattr(self.solver, "last_observed_nps", None)
-                payload = hardware.collect_runtime_metrics(
-                    session_id=self._session_id,
-                    solver_nps=solver_nps,
-                    shares_session_total=self.shares_accepted + self.shares_rejected,
-                    wrapper_version=self._wrapper_version,
-                    solver_sha256=self._solver_sha256,
-                    solver_backend=self._solver_backend,
+                # collect_runtime_metrics multi-samples nvidia-smi over ~2 s.
+                # Running it inline would block the asyncio loop for that
+                # window — which stalls solver-stdout reads and lets the
+                # solver pipe-fill and pause, making the GPU appear idle
+                # *precisely while we're trying to measure it*. Always run
+                # in a thread so the event loop keeps draining solver I/O.
+                payload = await loop.run_in_executor(
+                    None,
+                    lambda: hardware.collect_runtime_metrics(
+                        session_id=self._session_id,
+                        solver_nps=solver_nps,
+                        shares_session_total=self.shares_accepted + self.shares_rejected,
+                        wrapper_version=self._wrapper_version,
+                        solver_sha256=self._solver_sha256,
+                        solver_backend=self._solver_backend,
+                    ),
                 )
                 # Notify-style call: don't await a result (some pools reply,
                 # some don't; we don't care for periodic telemetry).

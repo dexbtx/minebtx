@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.10] - 2026-06-11 (Telemetry sampling no longer stalls the solver it's measuring)
+
+### Why
+v0.4.8/0.4.9's multi-sample GPU stats fixed single-snapshot's miss-the-burst
+problem but introduced a subtler one: `collect_runtime_metrics()` ran inline
+on the asyncio event loop. The ~2s sample window blocked the loop, which
+stalled wrapper reads of the solver subprocess's stdout pipe. The solver
+filled its stdout buffer trying to send share results, blocked on the
+write, paused its scan kernel — and the GPU went idle EXACTLY while the
+wrapper was sampling it. Result: the wrapper accurately measured the stall
+it was causing (~2% util / ~44W), the dashboard's recommendation engine
+tagged the rig "Below saturation," and operators saw "host bottleneck"
+on a rig that was actually running at 98% / ~130W between metric ticks.
+
+Caught on home-1070 — live nvidia-smi showed 98% / 113W, the wrapper
+reported 2% / 44W, the two could not both be right. Direct standalone
+calls to `hardware._gpu_runtime()` outside the wrapper returned realistic
+averages (62-98%), confirming the function itself was fine and the
+problem was the calling context.
+
+### What
+`StratumClient._metrics_loop()` now runs `collect_runtime_metrics()` in
+the default ThreadPoolExecutor via `loop.run_in_executor(None, ...)`. The
+event loop keeps draining solver I/O during the ~2s sample window, the
+solver never pauses, and the wrapper measures the actual mining state
+instead of an artifact of its own sampling.
+
+Verified on home-1070 canary: first post-fix metric tick read
+util=98 / power=109.9W matching live nvidia-smi, dashboard recommendation
+flipped from "Below saturation" to "Optimal."
+
+### Effect on operators
+- Dashboard's util/power averages now reflect reality even during the
+  sample tick.
+- No change to mining/share-submission path, solver, or any user-visible
+  config. Same 60s metric cadence.
+
 ## [0.4.9] - 2026-06-11 (Defense-in-depth: wrapper auto-update loop-guard)
 
 ### Why

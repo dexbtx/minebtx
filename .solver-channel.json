@@ -1,8 +1,8 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "released_at": "2026-06-11",
-  "notes": "v0.4.9 - defense-in-depth on top of v0.4.8. wrapper_updater.maybe_self_upgrade() now refuses to retry an upgrade within the same process if the just-installed tarball's __init__.py.__version__ didn't catch up to the target — preventing any future bumper-mistake of the v0.4.7 kind from infinite-looping the fleet. Carries forward v0.4.8's telemetry fixes (multi-sample GPU stats, cohort fields populated). Solver channel (btx-prebuilds-v0.32.5 for x86_64-linux) is unchanged from v0.4.7.",
+  "notes": "v0.4.10 - hotfix on top of v0.4.9. The v0.4.8/0.4.9 multi-sample GPU stats were running inline on the asyncio loop; blocking the loop for the ~2s sample window stalled solver-stdout reads, the solver pipe-filled and paused, the GPU went idle DURING the sample, and the wrapper reported the stall it caused (~2% util / ~44W). Fix: collect_runtime_metrics now runs in a thread executor so the event loop keeps draining solver I/O during sampling. Verified on home-1070 canary: first post-fix metric tick read util=98 / power=110W matching live nvidia-smi, dashboard recommendation flipped from Below saturation to Optimal. Solver channel (btx-prebuilds-v0.32.5 for x86_64-linux) is unchanged from v0.4.7.",
   "platforms": {
     "x86_64-linux": {
       "sha256": "e0505f848c4561496014f09ad5e5b267f8244723af46dccfac44f269785cbae3",
