@@ -129,12 +129,44 @@ def maybe_self_upgrade() -> None:
         return
 
     # Loop-guard. The child process started by a successful upgrade
-    # inherits this env var. If we get back here with the env var equal
-    # to our newly-loaded __version__, the upgrade just happened and
-    # we're up to date — don't even try again this run.
+    # inherits this env var. If we get back here with `just` set we
+    # **never** attempt another upgrade in this process lifetime — exactly
+    # one upgrade attempt per exec, period.
+    #
+    # Two cases:
+    #
+    #   • `just <= __version__` (intended path): the new package's
+    #     __init__.py.__version__ caught up to (or past) the target, the
+    #     upgrade succeeded. Log info, return.
+    #
+    #   • `just > __version__` (broken-release defense, v0.4.9): we
+    #     pip-installed `just` but our __init__.py.__version__ is still
+    #     below it. This means the published tarball is malformed — the
+    #     packager bumped pyproject.toml + channel.json but forgot to bump
+    #     __init__.py.__version__ (the v0.4.7 bug class). Without this
+    #     branch, the next iteration would see `target > __version__`
+    #     again and re-install the same broken tarball forever; the
+    #     operator's miner never makes it past the updater. Log a loud
+    #     warning so the operator can report it, then return — mining
+    #     continues on the (broken-package-but-still-running) installed
+    #     code, which at worst is the previous version + the new tarball's
+    #     unmatched __version__.
     just = os.environ.pop("DEXBTX_WRAPPER_JUST_UPGRADED", None)
-    if just and _parse_version(just) <= _parse_version(__version__):
-        log.info("wrapper auto-update: post-upgrade restart confirmed at v%s", __version__)
+    if just:
+        if _parse_version(just) <= _parse_version(__version__):
+            log.info(
+                "wrapper auto-update: post-upgrade restart confirmed at v%s",
+                __version__,
+            )
+        else:
+            log.warning(
+                "wrapper auto-update: pip-installed v%s but __init__.py.__version__ "
+                "is still %s — the published tarball did not bump the constant. "
+                "Refusing to retry the upgrade this run (would infinite-loop). "
+                "Mining will continue on the installed code. Please report a "
+                "version-bump bug to the maintainer.",
+                just, __version__,
+            )
         return
 
     manifest_url = os.environ.get("DEXBTX_MANIFEST_URL", DEFAULT_MANIFEST_URL)

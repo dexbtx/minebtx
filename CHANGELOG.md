@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.4.9] - 2026-06-11 (Defense-in-depth: wrapper auto-update loop-guard)
+
+### Why
+v0.4.7 shipped with `__init__.py.__version__ = "0.4.6"` — the constant was never
+bumped alongside pyproject.toml or `.solver-channel.json`. The wrapper auto-updater
+reads `__init__.py.__version__` to decide whether to self-upgrade. After
+pip-installing the v0.4.7 tarball it would re-exec, see __version__ still as
+"0.4.6" (because the new tarball ALSO had "0.4.6"), and re-trigger the upgrade
+forever. v0.4.8 fixed the immediate bumper mistake; v0.4.9 makes the auto-updater
+**immune to the bug class itself** so a future packager mistake can't ever
+infinite-loop the fleet again.
+
+### What
+`wrapper_updater.maybe_self_upgrade()` now enforces "at most one upgrade attempt
+per process exec." The loop-guard previously only fired when the new package's
+`__version__` >= target (the successful-upgrade case). It now also fires when
+`__version__` < target after a fresh upgrade — that's the signature of a
+malformed release (channel.json/pyproject.toml bumped without bumping
+`__init__.py.__version__`). The branch:
+
+- Logs a WARNING naming both the target version pip-installed and the actual
+  `__version__` so the operator can report it.
+- Returns without retrying — mining continues on whatever code is now installed.
+
+If the new tarball is somehow worse than what we had, the operator can still
+opt out with `DEXBTX_NO_WRAPPER_AUTOUPDATE=1` or pin
+`DEXBTX_MINER_PKG_URL_TEMPLATE` to an older release.
+
+### Effect on operators
+- v0.4.9 carries forward all of v0.4.8's telemetry fixes (multi-sample GPU stats,
+  populated cohort fields).
+- Any future "bumper forgot to bump `__init__.py`" mistake will surface as a
+  single warning line per restart instead of an infinite pip-install loop.
+- Mining / share-submission path bit-for-bit unchanged from v0.4.7.
+
 ## [0.4.8] - 2026-06-11 (Accurate telemetry + v0.4.7 upgrade-loop hotfix)
 
 ### Why (telemetry)

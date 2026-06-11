@@ -12,7 +12,7 @@ canonical CUDA kernel + pre-loaded cubins for the duration of the session
 # if you bump pyproject.toml + channel.json but forget to bump THIS, every
 # operator's wrapper_updater will infinite-loop installing the same tarball
 # (it never sees __version__ catch up). See v0.4.8 CHANGELOG for the incident.
-__version__ = "0.4.8"
+__version__ = "0.4.9"
 # Single source of truth for the User-Agent string sent in mining.subscribe.
 USER_AGENT = f"dexbtx-miner/{__version__}"
 
