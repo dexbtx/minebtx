@@ -103,7 +103,7 @@ You're already mining BTX solo with your own btxd and `btx-gbt-solve`. You want 
 |---|---|---|
 | `btx-gbt-solve` binary | Often pre-v4.0 — missing `--share-target` + `--daemon` flags | v4.3+ with `--share-target` (pool early-exit) and `--daemon` (persistent solver, eliminates per-slice CUDA-context-init cost) |
 | Solver kernel for your GPU | Pascal-only sm_61 native; PTX-JIT to everything else | Native cubins for sm_61 + sm_89 + sm_90 + sm_120 (Pascal + Ada + Hopper + Blackwell). Turing/Ampere still PTX-JIT |
-| `BTX_MATMUL_GPU_INPUTS` | Often unset → defaults to `1` (GPU-generated inputs) | `0` (CPU-generated). Mandatory — without this every modern GPU caps at ~8% util / 33 W |
+| `BTX_MATMUL_GPU_INPUTS` | May be pinned to a stale `0` from a pre-fork config | `1` (GPU-generated). Mandatory post-block-125,000 — the per-nonce A/B matrix means GPU-gen inputs are required for saturation on every card |
 | Tuning profile | `BTX_MATMUL_PREPARE_WORKERS=8`, `SOLVER_THREADS=4`, `BATCH=32` (old Pascal-era defaults) | `PREPARE_WORKERS=16`, `SOLVER_THREADS=8`, `BATCH=128` — universal across Pascal through Blackwell. **Sustained `workers=16` is the lever that takes a 5070 from 70% util to 100%** |
 | Env-var names you might have set | `BTX_MATMUL_PREFETCH`, `BTX_MATMUL_BATCH_SIZE` (don't exist) | `BTX_MATMUL_PREPARE_PREFETCH_DEPTH`, `BTX_MATMUL_SOLVE_BATCH_SIZE` (the actual names). Wrong names are silent no-ops |
 | Orchestrator | `btx-gbt-miner.py` (solo-mining, polls your local btxd) | `dexbtx-miner` (stratum client, drives the solver in daemon mode) |

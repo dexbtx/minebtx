@@ -43,11 +43,12 @@ solver_batch_size: 128           # BTX_MATMUL_SOLVE_BATCH_SIZE
 solver_prefetch_depth: 8         # BTX_MATMUL_PREPARE_PREFETCH_DEPTH
 solver_pipeline_async: 1         # BTX_MATMUL_PIPELINE_ASYNC (overlap prep+kernel)
 
-# MANDATORY. Generates matmul inputs on the CPU instead of the GPU.
-# Despite the name, gpu_inputs=0 is what makes Blackwell + every other
-# modern card actually saturate. The default was the wrong way around
-# in the upstream BTX matmul backend for months.
-gpu_inputs: 0
+# MANDATORY: gpu_inputs=1 (GPU-generated matmul inputs).
+# Post-block-125,000 the matmul A/B matrix is unique per nonce (no batch
+# amortization), so GPU-generated inputs is what makes every card -- Pascal
+# through Blackwell -- saturate. NOTE: pre-fork the opposite (gpu_inputs=0)
+# was correct; any older config/guide telling you 0 is STALE. Always 1 now.
+gpu_inputs: 1
 
 # ─── Slice sizing ────────────────────────────────────────────────────────
 # Nonces tried per solver invocation. Safety ceiling; in practice

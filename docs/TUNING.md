@@ -18,7 +18,7 @@ this with sweeps over batch=32, 64, 128, 256, 512 on 4060 Ti and 5070).
 | Env var | What | Reasonable range | Universal default |
 |---|---|---|---|
 | `BTX_MATMUL_BACKEND` | Backend selection | `cuda` (NVIDIA), `metal` (Apple), `cpu` | `cuda` |
-| `BTX_MATMUL_GPU_INPUTS` | CPU vs GPU generates matmul inputs | `0` or `1` | **`0` (mandatory)** — CPU-gen is the "GPU saturation breakthrough"; without this every modern card caps at 8% util / 33W |
+| `BTX_MATMUL_GPU_INPUTS` | CPU vs GPU generates matmul inputs | `0` or `1` | **`1` (mandatory)** — GPU-gen inputs. Post-block-125,000 the matmul A/B matrix is unique per nonce (no batch amortization), so `1` is required for saturation on every card, Pascal→Blackwell. (Pre-fork the opposite `0` was correct — any guide still saying `0` is stale.) |
 | `BTX_MATMUL_SOLVE_BATCH_SIZE` | Nonces per kernel launch | 16 → 512 | **`128`** universally. Tested 64–512 on multiple cards; no measurable difference once `workers` is right. Avoid 256+ on 5070 Ti (broke CUDA historically). |
 | `BTX_MATMUL_PREPARE_PREFETCH_DEPTH` | Queue depth for matmul input prep | 4 → 16 | **`8`** is the universal sweet spot |
 | `BTX_MATMUL_PREPARE_WORKERS` | CPU threads for input gen | 8 → 16 | **`16`** universally (4060 Ti and 5060 Ti are fine at 12; 16 doesn't hurt). **KEY LEVER** — bump alongside `SOLVER_THREADS` if util is sub-95% |
@@ -183,7 +183,7 @@ nvidia-smi --query-gpu=utilization.gpu,power.draw --format=csv,noheader
 
 # 4. Env vars correctly reaching subprocess
 cat /proc/$(pgrep -f 'btx-gbt-solve.*--daemon')/environ | tr "\0" "\n" | grep BTX_MATMUL
-# Should show BACKEND=cuda, GPU_INPUTS=0, SOLVE_BATCH_SIZE=128,
+# Should show BACKEND=cuda, GPU_INPUTS=1, SOLVE_BATCH_SIZE=128,
 # PREPARE_WORKERS=16, PREPARE_PREFETCH_DEPTH=8, PIPELINE_ASYNC=1,
 # SOLVER_THREADS=8 (or your custom config).
 ```

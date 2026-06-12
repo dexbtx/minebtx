@@ -203,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", default=d["workers"],
                     help="Prepare workers, comma-separated")
     ap.add_argument("--pipeline-async", type=int, default=1)
-    ap.add_argument("--gpu-inputs", type=int, default=0)
+    ap.add_argument("--gpu-inputs", type=int, default=1)
     ap.add_argument("--write-config", action="store_true",
                     help="On success, rewrite ~/.dexbtx-miner/config.yaml with the highest-throughput config")
     args = ap.parse_args(argv)

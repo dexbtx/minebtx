@@ -422,7 +422,7 @@ solver_batch_size: ${GPU_BATCH}        # BTX_MATMUL_SOLVE_BATCH_SIZE
 solver_prefetch_depth: ${GPU_PREFETCH} # BTX_MATMUL_PREPARE_PREFETCH_DEPTH
 solver_prepare_workers: ${GPU_WORKERS} # BTX_MATMUL_PREPARE_WORKERS
 solver_pipeline_async: 1               # BTX_MATMUL_PIPELINE_ASYNC (overlap prep+kernel)
-gpu_inputs: 0                          # BTX_MATMUL_GPU_INPUTS (CPU-gen inputs; the "GPU saturation breakthrough" fix)
+gpu_inputs: 1                          # BTX_MATMUL_GPU_INPUTS (GPU-gen inputs; MANDATORY post-block-125000 for saturation on all cards; 0 was pre-fork)
 
 nonces_per_slice: 2000000
 reconnect_initial_s: 1.0

@@ -101,8 +101,8 @@ def _make_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--prefetch", type=int,
                     help="BTX_MATMUL_PREPARE_PREFETCH_DEPTH; canonical 8")
     ap.add_argument("--gpu-inputs", type=int,
-                    help="BTX_MATMUL_GPU_INPUTS (must be 0 — CPU-gen inputs is "
-                         "the saturation breakthrough; 1 caps every modern card at ~8%% util)")
+                    help="BTX_MATMUL_GPU_INPUTS (must be 1 post-block-125000 — "
+                         "GPU-gen inputs; required for saturation on every card)")
     ap.add_argument("--nonces-per-slice", type=int,
                     help="Nonces tried per solver invocation before checking for new work")
     ap.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"],

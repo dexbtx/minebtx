@@ -40,7 +40,7 @@ class MinerConfig:
     solver_prefetch_depth: int | None = 8       # BTX_MATMUL_PREPARE_PREFETCH_DEPTH
     solver_pipeline_async: int | None = 1       # BTX_MATMUL_PIPELINE_ASYNC (1=overlap prep + kernel)
     solver_backend: str = "cuda"                # BTX_MATMUL_BACKEND (cuda|cpu|metal|mlx)
-    gpu_inputs: int | None = 0                  # BTX_MATMUL_GPU_INPUTS (must be 0 — the saturation breakthrough)
+    gpu_inputs: int | None = 1                  # BTX_MATMUL_GPU_INPUTS (must be 1 post-block-125000 — GPU-gen inputs; saturation on all cards)
 
     # Ceiling on nonces tried per solver invocation. In practice this is
     # rarely the binding limit — `solver_max_seconds_per_slice` bounds

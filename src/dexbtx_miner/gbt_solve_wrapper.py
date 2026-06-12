@@ -99,7 +99,7 @@ class SolverEnv:
     prefetch_depth: int | None = None          # BTX_MATMUL_PREPARE_PREFETCH_DEPTH
     prepare_workers: int | None = None         # BTX_MATMUL_PREPARE_WORKERS
     pipeline_async: int | None = None          # BTX_MATMUL_PIPELINE_ASYNC (0/1)
-    gpu_inputs: int | None = None              # BTX_MATMUL_GPU_INPUTS (0=CPU-gen, the Pascal fix)
+    gpu_inputs: int | None = None              # BTX_MATMUL_GPU_INPUTS (1=GPU-gen, mandatory post-block-125000; 0 was the pre-fork value)
     solver_threads: int | None = None          # BTX_MATMUL_SOLVER_THREADS
     backend: str | None = None                 # BTX_MATMUL_BACKEND (cuda/cpu/metal/mlx)
     pool_slots: int | None = None
