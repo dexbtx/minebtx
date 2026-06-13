@@ -100,10 +100,25 @@ jobs:
           echo "Patches available:"
           ls -la "$PATCH_DIR"
 
-          # Apply upstream-file patches: 05 (cmake target) + 10/11 (PR#58 kernel opts)
-          for p in 05-cmakelists-add-gbt-solve-target.patch 10-pr58-oracle-accel-windowed-sha.patch 11-pr58-matmul-accel-factored-compression.patch; do
-            echo "=== applying $p ==="
-            patch -p1 < "$PATCH_DIR/$p"
+          # Apply patch 05 (cmake target — always needed) and conditionally apply
+          # 10/11 (PR#58 kernel opts). Both PR#58 patches were upstreamed in BTX
+          # v0.32.8; skip them if they're already present in the source tree.
+          echo "=== applying 05-cmakelists-add-gbt-solve-target.patch ==="
+          patch -p1 < "$PATCH_DIR/05-cmakelists-add-gbt-solve-target.patch"
+
+          for p in 10-pr58-oracle-accel-windowed-sha.patch 11-pr58-matmul-accel-factored-compression.patch; do
+            echo "=== checking $p ==="
+            if patch -p1 --dry-run -R --silent < "$PATCH_DIR/$p" > /dev/null 2>&1; then
+              echo "  -> already applied upstream (PR#58 in v0.32.8+); skipping"
+              continue
+            fi
+            if patch -p1 --dry-run --silent < "$PATCH_DIR/$p" > /dev/null 2>&1; then
+              echo "  -> applying"
+              patch -p1 < "$PATCH_DIR/$p"
+            else
+              echo "ERROR: $p neither applies cleanly nor is already present"
+              exit 1
+            fi
           done
 
           # Copy in btx-gbt-solve.cpp (full file; upstream tree doesn't have it).
