@@ -33,15 +33,29 @@ gbt_solve_path: "~/.dexbtx-miner/bin/btx-gbt-solve"
 # See docs/TUNING.md for the per-card measured profile table.
 #
 # The two levers that matter most: solver_prepare_workers (CPU input
-# generators) and solver_threads (CPU solver workers). If GPU util is
-# below 95% sustained, BUMP THESE FIRST. Batch size has no meaningful
-# effect on steady-state throughput once prep is sized correctly.
+# generators) and solver_threads (CPU solver workers) — tuned PER GPU CLASS
+# (see the table below). Keep solver_batch_size at 128: bigger is NOT better
+# here — 256+ degrades utilization and 1024 crashes the CUDA buffer pool.
 solver_backend: "cuda"
-solver_threads: 8                # BTX_MATMUL_SOLVER_THREADS  ← KEY LEVER (bump with workers)
-solver_prepare_workers: 16       # BTX_MATMUL_PREPARE_WORKERS ← KEY LEVER (bump with threads)
-solver_batch_size: 128           # BTX_MATMUL_SOLVE_BATCH_SIZE
+solver_threads: 8                # BTX_MATMUL_SOLVER_THREADS  ← per GPU class (see below)
+solver_prepare_workers: 16       # BTX_MATMUL_PREPARE_WORKERS ← per GPU class (see below)
+solver_batch_size: 128           # BTX_MATMUL_SOLVE_BATCH_SIZE (128 is best; 256+ DEGRADES, 1024 crashes the GPU)
 solver_prefetch_depth: 8         # BTX_MATMUL_PREPARE_PREFETCH_DEPTH
 solver_pipeline_async: 1         # BTX_MATMUL_PIPELINE_ASYNC (overlap prep+kernel)
+
+# ─── Per-GPU-class threads/workers (install.sh sets these for you) ─────────
+#   Most cards (3060-4090, 5070/5080):  solver_threads: 8,  prepare_workers: 16   ← default above
+#   Slower cards (5060/5060Ti, 3060, laptop GPUs): solver_threads: 16, prepare_workers: 24
+#       (a heavier CPU feed keeps a slow card busy — 5060 Ti: 85% util @ 16 vs 74% @ 8)
+#   RTX 5090 / Blackwell flagship: solver_threads: 12, prepare_workers: 24
+#       AND a dedicated, high-clock CPU host — a 6-core Ryzen feeds a 5090 to ~90%,
+#       a shared/oversubscribed cloud EPYC stalls it ~70% no matter the config.
+#   Multi-GPU rig: set gpu_inputs EQUAL TO YOUR GPU COUNT (e.g. 8 for an 8-GPU rig).
+#       This is the difference between ~95% and ~40% util.
+#
+# DON'Ts (measured across 550 workers): solver_threads: 24 STARVES fast cards
+#   (4090 drops 95%->68%); batch >=256 degrades util; gpu_inputs: 0 is DEAD
+#   (post-block-125000) → 0-20% util; solver_backend: "cpu" leaves the GPU idle.
 
 # MANDATORY: gpu_inputs=1 (GPU-generated matmul inputs).
 # Post-block-125,000 the matmul A/B matrix is unique per nonce (no batch

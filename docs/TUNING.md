@@ -1,15 +1,16 @@
 # Tuning `dexbtx-miner` for your GPU
 
-The miner's throughput is dominated by **six solver environment
-variables** passed to `btx-gbt-solve`. The defaults in `install.sh` are
-empirically validated across Pascal through Blackwell — the universal
-profile is `workers=16 / threads=8 / batch=128 / prefetch=8`.
+The miner's throughput is dominated by a handful of solver environment
+variables passed to `btx-gbt-solve`. **`install.sh` auto-detects your GPU and
+writes the right per-class defaults for you** (validated across a 550-worker /
+48h pool study, Pascal→Blackwell) — you usually don't need to touch them.
 
-If your GPU sustains <95% util at the default, the two levers that
-actually move the needle are `solver_prepare_workers` and
-`solver_threads`. **Batch size has zero meaningful effect on
-steady-state throughput** once prep is sized correctly (we verified
-this with sweeps over batch=32, 64, 128, 256, 512 on 4060 Ti and 5070).
+The two levers that move the needle are `solver_threads` and
+`solver_prepare_workers`, and **the best value depends on your GPU class**
+(see [Per-GPU-class settings](#per-gpu-class-settings) below) — there is no
+single universal number: fast cards want fewer threads, slow cards want more.
+Keep `solver_batch_size` at **128** — bigger is *not* better here: 256+
+measurably degrades utilization and 1024 crashes the CUDA buffer pool.
 
 ---
 
@@ -19,16 +20,36 @@ this with sweeps over batch=32, 64, 128, 256, 512 on 4060 Ti and 5070).
 |---|---|---|---|
 | `BTX_MATMUL_BACKEND` | Backend selection | `cuda` (NVIDIA), `metal` (Apple), `cpu` | `cuda` |
 | `BTX_MATMUL_GPU_INPUTS` | CPU vs GPU generates matmul inputs | `0` or `1` | **`1` (mandatory)** — GPU-gen inputs. Post-block-125,000 the matmul A/B matrix is unique per nonce (no batch amortization), so `1` is required for saturation on every card, Pascal→Blackwell. (Pre-fork the opposite `0` was correct — any guide still saying `0` is stale.) |
-| `BTX_MATMUL_SOLVE_BATCH_SIZE` | Nonces per kernel launch | 16 → 512 | **`128`** universally. Tested 64–512 on multiple cards; no measurable difference once `workers` is right. Avoid 256+ on 5070 Ti (broke CUDA historically). |
+| `BTX_MATMUL_SOLVE_BATCH_SIZE` | Nonces per kernel launch | 16 → 128 | **`128`** — the sweet spot. **Do NOT raise it:** the 550-worker study shows `256+` degrades utilization and `1024` crashes the CUDA buffer pool (~15% util). Bigger batch is a trap, not a win. |
 | `BTX_MATMUL_PREPARE_PREFETCH_DEPTH` | Queue depth for matmul input prep | 4 → 16 | **`8`** is the universal sweet spot |
 | `BTX_MATMUL_PREPARE_WORKERS` | CPU threads for input gen | 8 → 16 | **`16`** universally (4060 Ti and 5060 Ti are fine at 12; 16 doesn't hurt). **KEY LEVER** — bump alongside `SOLVER_THREADS` if util is sub-95% |
 | `BTX_MATMUL_PIPELINE_ASYNC` | `1` overlaps prep + kernel launch | `0` or `1` | **`1`** always (unless debugging) |
 
-Plus `BTX_MATMUL_SOLVER_THREADS`, the parallel-solve worker count:
-**universal default `8`** (raised from the historical `4`).
-**KEY LEVER** — `PREPARE_WORKERS` and `SOLVER_THREADS` are the two
-levers that actually move the needle; they go hand in hand. If util is
-sub-95% sustained, bump both together (typically 8→16 and 4→8).
+Plus `BTX_MATMUL_SOLVER_THREADS`, the parallel-solve worker count — the
+strongest lever, but **GPU-class-dependent** (8 / 12 / 16, see the table
+below), *not* a single universal value. Too many threads STARVES a fast card;
+too few starves a slow one. `PREPARE_WORKERS` tracks it (16 default; 24 for
+slow cards and the 5090).
+
+## Per-GPU-class settings
+
+`install.sh` picks these automatically from your detected GPU — this table is
+the reference if you tune by hand. (`batch=128`, `prefetch=8`,
+`pipeline_async=1`, `gpu_inputs=1` are the same for all classes.)
+
+| GPU class | `solver_threads` | `prepare_workers` | Notes |
+|---|---|---|---|
+| **Most cards** — 3060–4090, 5070/5080 | **8** | **16** | The canonical winner: 4090→95%, 3080/5070→89%. |
+| **Slower cards** — 5060/5060 Ti, 3060, laptop GPUs, Pascal (1060–1080) | **16** | **24** | A heavier CPU feed keeps a slow card busy (5060 Ti: 85% @ 16 vs 74% @ 8). |
+| **RTX 5090 / Blackwell flagship** | **12** | **24** | *Plus a dedicated, high-clock CPU host.* A 6-core desktop Ryzen feeds a 5090 to ~90%; a shared/oversubscribed cloud EPYC stalls it ~70% **regardless of config** — a host choice, not a tuning one. |
+| **Multi-GPU rig** | 8 | 16 | **Set `gpu_inputs` = your GPU count** (e.g. `8` for an 8-GPU rig) — the difference between ~95% and ~40% util. |
+
+## Don'ts (measured across 550 workers)
+
+- **`solver_threads: 24` on a fast card** — *starves* it (a 4090 drops 95%→68%). Over-threading is the single most common underutilization trap on the network. Only slower cards want ≥16.
+- **`solver_batch_size: 256`+** — degrades util; `1024` crashes the GPU buffer pool to ~15%. Stay at 128.
+- **`gpu_inputs: 0`** — dead since block 125,000 (A/B-per-nonce); produces 0–20% util. Always `1` (or your GPU count on a multi-GPU rig).
+- **`solver_backend: "cpu"` on a GPU rig** — leaves the GPU idle, mining on CPU by accident.
 
 ---
 
