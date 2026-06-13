@@ -191,17 +191,23 @@ in this table was measured on real hardware via the
 | RTX 5060 Ti (Blackwell sm_120) | 16 | 8 | 128 | 99% / 150W |
 | RTX 5070 (Blackwell sm_120) | 16 | 8 | 128 | 100% / 223W |
 | RTX 5070 Ti (Blackwell sm_120) | 16 | 8 | 128 | (avoid batch=256 — broke CUDA on this card historically) |
+| RTX 5090 (Blackwell sm_120) | 24 | 12 | 128 | 66% on a shared host → ~90% on a dedicated high-clock CPU (host-bound, not config) |
 
-**Universal default**: `workers=16 threads=8 batch=128 prefetch=8`
-works on every NVIDIA generation from Pascal through Blackwell. The
-installer writes this for any unknown card.
+**Default** (`workers=16 batch=128 prefetch=8`, what the installer writes for
+any unknown card): `solver_threads` is the one GPU-class-variable knob —
+**8** for most cards (3060–4090, 5070/5080), **16** for slower cards
+(5060/5060 Ti, 3060, laptop GPUs — they want a heavier CPU feed), and
+**12** for the RTX 5090 / Blackwell flagships (which also need a dedicated,
+high-clock CPU host). `batch=128` is the same on every generation, Pascal
+through Blackwell. See [docs/TUNING.md](docs/TUNING.md) for the full table.
 
 The dominant levers are `solver_prepare_workers` + `solver_threads`,
 working together — the matmul backend is CPU-input-prep-bound on every
 modern card we've tested. Raising the pair from `workers=8/threads=4`
 to `workers=16/threads=8` took an RTX 5070 from 70% → 100% util. Bump
-them as a unit; they go hand in hand. Batch size has no effect on
-steady-state throughput once prep is sized correctly.
+them as a unit; they go hand in hand. Keep `batch=128`, though — it's the
+sweet spot on every card: `256`+ *degrades* utilization and `1024` crashes
+the CUDA buffer pool (~15% util). Bigger is not better.
 
 ---
 

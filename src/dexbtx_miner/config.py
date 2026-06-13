@@ -28,12 +28,13 @@ class MinerConfig:
     # config.yaml or the `BTX_GBT_SOLVE` env var if you have a custom build.
     gbt_solve_path: str = str(Path.home() / ".dexbtx-miner" / "bin" / "btx-gbt-solve")
 
-    # Solver tuning. Universal canonical defaults for NVIDIA Pascal through
-    # Blackwell. The two key levers are solver_prepare_workers (CPU input
-    # generators) and solver_threads (CPU solver workers); bump both first
-    # if GPU util sustains below 95%. Batch size has no meaningful effect
-    # on steady-state throughput once prep is sized correctly. See
-    # docs/TUNING.md for the per-GPU measured profile table.
+    # Solver tuning. Canonical defaults for NVIDIA Pascal through Blackwell;
+    # install.sh overrides solver_threads/prepare_workers per detected GPU
+    # class (8/12/16). The two key levers are solver_prepare_workers (CPU
+    # input generators) and solver_threads (CPU solver workers); bump both
+    # first if GPU util sustains below 95%. Keep batch at 128 — it's the
+    # sweet spot; 256+ degrades util and 1024 crashes the CUDA buffer pool.
+    # See docs/TUNING.md for the per-GPU measured profile table.
     solver_threads: int | None = 8              # BTX_MATMUL_SOLVER_THREADS  (key lever — bump with prepare_workers)
     solver_prepare_workers: int | None = 16     # BTX_MATMUL_PREPARE_WORKERS (key lever — bump with threads)
     solver_batch_size: int | None = 128         # BTX_MATMUL_SOLVE_BATCH_SIZE
