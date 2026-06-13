@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.4.13] - 2026-06-13 (all platforms → btx-prebuilds-v0.32.8)
+
+### What
+- `.solver-channel.json` `x86_64-linux` entry: sha → `50ec2e4ecd685c7e0e1199746405ee0bd94bc70a40f63bd1fa7989992a89b799`, url → `btx-prebuilds-v0.32.8/btx-gbt-solve`. CUDA 12.8, archs `sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120`. LTO enabled. Built on home-1070, KAT-verified bit-equivalent (first-share digest `ca43457e54ba7e7d5cd6dfbbf17583887ae78cb75391df4e2a0c1d941ff413d6` at nonce=1) to the v0.32.5 production binary on the loose-target reference job.
+- `.solver-channel.json` `aarch64-linux` entry: sha → `e4f03f4f91f019bfcc3d82291cfbcbd7e9f89cf309820f2d51a6c06cccab6be9`, url → `btx-prebuilds-v0.32.8/btx-gbt-solve-aarch64-linux-gnu-cuda13`. CUDA 13.0, archs `sm_80;sm_90;sm_120;sm_121` (Grace + Blackwell, including GB10/Spark).
+- `.solver-channel.json` `aarch64-linux-cuda12` entry: sha → `a738d4e8543a9a3224c5c94059d5668ade96dcbdcd76f118619eb8370a79104d`, url → `btx-prebuilds-v0.32.8/btx-gbt-solve-aarch64-linux-gnu-cuda12`. CUDA 12.8, archs `sm_80;sm_90;sm_120`.
+- `arm64-darwin` entry unchanged (still on `btx-prebuilds-v0.32.2` pending an Apple Silicon rebuild from the v0.32.8 source tree). Defer to a future point release.
+- All three aarch64/x86_64 binaries built from `btxchain/btx` tag `v0.32.8` applying patch `05-cmakelists-add-gbt-solve-target.patch` (the PR58 oracle-accel + matmul-accel patches 10/11 are now upstreamed in v0.32.8 source — only the cmakelists target patch remains).
+
+### Why
+v0.32.8 ships consensus-stable hardening: recovery-exit fee replacement, recovery-exit mempool liveness, mining health RPC, local deep-reorg protection profile, plus CUDA matmul solver pipeline optimizations (CPU-side nonce-seed pipeline — reduces repeated CPU setup work). Consensus rules unchanged from v0.32.5 (block-125000 V2 nonce-bound seed).
+
+Field-tested on home-1070 (GTX 1070 / Pascal sm_61) for 51 min: 203 shares accepted, 0 rejected, 0% reject rate, throughput essentially at parity with v0.32.5 basis (settled-window average ~1438 N/s vs ~1500 baseline = within 4%, inside vardiff-noise margin). **Pascal is GPU-bottlenecked, so the CPU-pipeline opt has no measurable headroom to give back on this rig.** CPU-bound rigs (5090 / 5070 Ti on shared-CPU hosts, Grace+Blackwell) are where the optimization should land measurable gains; verification by those operators encouraged.
+
+### Wrapper code
+No changes from v0.4.11. The local v0.4.12 session_gen-cursor experiment was tested and **did not deliver** — post-reconnect rejects cascaded to 47% over 5 min and 95% over 10 min on home-1070, matching v0.4.11's pre-fix behavior. v0.4.12 was never published; v0.4.13 carries v0.4.11 wrapper code unchanged. Investigation into the cross-session-cursor / post-reconnect reject pattern continues separately.
+
+### Effect on operators
+- **x86_64-linux:** solver auto-update will pull the new `btx-prebuilds-v0.32.8/btx-gbt-solve` binary on next miner restart.
+- **aarch64-linux + aarch64-linux-cuda12:** solver auto-update will pull the new aarch64 binaries from `btx-prebuilds-v0.32.8`.
+- **arm64-darwin (Apple Silicon):** no change; remains on `btx-prebuilds-v0.32.2`.
+- **No config changes required.**
+- **No mining-path code changes** — same wrapper-solver protocol, same C4 multi-share batching, same telemetry.
+
+
 ## [0.4.11] - 2026-06-11 (aarch64-linux + aarch64-linux-cuda12 → btx-prebuilds-v0.32.5)
 
 ### What

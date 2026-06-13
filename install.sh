@@ -23,7 +23,7 @@
 # ─── Self-update bootstrap ──────────────────────────────────────────────────
 # Marker — keep this exact line + bump on each release. The bootstrap
 # downstream parses this string and skips re-exec if it matches.
-INSTALL_SH_VERSION="0.3.14"
+INSTALL_SH_VERSION="0.3.15"
 
 INSTALL_SH_LATEST_URL="https://github.com/dexbtx/minebtx/raw/main/install.sh"
 
@@ -52,16 +52,16 @@ set -euo pipefail
 # ─── Configurables ──────────────────────────────────────────────────────────
 # Pin the prebuilds release tag. install.sh always pulls this version.
 # Bump in lockstep with experiments/vast/prebuilds and pyproject.toml.
-PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.5}"
-EXPECTED_SHA256="${EXPECTED_SHA256:-e0505f848c4561496014f09ad5e5b267f8244723af46dccfac44f269785cbae3}"
+PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.8}"
+EXPECTED_SHA256="${EXPECTED_SHA256:-50ec2e4ecd685c7e0e1199746405ee0bd94bc70a40f63bd1fa7989992a89b799}"
 # Darwin arm64 (Apple Silicon + Metal) solver pin. Fill in after the first green
 # build-solver-macos-arm64 CI run (the workflow prints the sha256). Until then,
 # macOS installs intentionally fail rather than install an unverified binary.
 DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-6d773b8b4e74d5b538102c24f67503004c407d555d0201636632d93a05f6516a}"
 # Linux aarch64 (Grace / GB10 Blackwell etc.) CUDA solver pins. Default CUDA
 # toolkit variant is cuda12; set DEXBTX_CUDA=cuda13 for newer-driver hosts.
-AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-409aa27aecea8ca389b4afd0b625f866b457a8aef82255ccac87bd53bcb62c57}"
-AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-462551244c5a8a05bde294e2102baaecbbf77f5f9ee31aad76e6e9a34ade3a10}"
+AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-a738d4e8543a9a3224c5c94059d5668ade96dcbdcd76f118619eb8370a79104d}"
+AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-e4f03f4f91f019bfcc3d82291cfbcbd7e9f89cf309820f2d51a6c06cccab6be9}"
 # Linux x86_64 AMD/ROCm (HIP) solver pin — EXPERIMENTAL. Selected when an AMD
 # GPU is present (rocm-smi) or DEXBTX_GPU=rocm. Correctness is enforced by an
 # install-time HIP-vs-CPU self-check below (the HIP kernel is unproven off real
@@ -286,7 +286,7 @@ else
     # GitHub keeps the install pinned to a specific release commit and
     # avoids a third-party package surface. Override DEXBTX_MINER_PKG_URL
     # to install from a fork or a different ref.
-    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.6.tar.gz}"
+    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.13.tar.gz}"
     log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
     pip_install --upgrade "$DEXBTX_MINER_PKG_URL"
 

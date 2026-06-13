@@ -1,36 +1,36 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.11",
-  "released_at": "2026-06-11",
-  "notes": "v0.4.11 - aarch64-linux + aarch64-linux-cuda12 now point at btx-prebuilds-v0.32.5 (Grace/Graviton/GB10/Spark rigs get the same PR58+C4 throughput win the x86_64 fleet got at v0.4.7). Built via the build-solver-aarch64.yml workflow on GitHub's ubuntu-24.04-arm runner from btxchain/btx v0.32.5 with patches 05+10+11. arm64-darwin entry still on v0.32.2 pending Apple Silicon rebuild. No code changes from v0.4.10; manifest-only update.",
+  "version": "0.4.13",
+  "released_at": "2026-06-13",
+  "notes": "v0.4.13 - all CUDA-Linux platforms now point at btx-prebuilds-v0.32.8. BTX v0.32.8 ships recovery-exit fee-replacement, mempool/reorg hardening, mining health RPC, and CPU nonce-seed pipeline optimization (perf gain hardware-dependent; most visible on CPU-bound Blackwell/Grace rigs). Consensus rules unchanged from v0.32.5. PR58 (windowed SHA + factored compression) is upstreamed in v0.32.8 source; only patch 05 (cmake target) is still applied at build time. arm64-darwin entry unchanged (still on v0.32.2 pending an Apple Silicon rebuild from the v0.32.8 source tree). No wrapper code changes from v0.4.11; the v0.4.12 session_gen experiment was tested and did not deliver and was never published.",
   "platforms": {
     "x86_64-linux": {
-      "sha256": "e0505f848c4561496014f09ad5e5b267f8244723af46dccfac44f269785cbae3",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.5/btx-gbt-solve",
+      "sha256": "50ec2e4ecd685c7e0e1199746405ee0bd94bc70a40f63bd1fa7989992a89b799",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.8/btx-gbt-solve",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
-      "notes": "BTX v0.32.5 + PR58 GPU saturation kernels (byte-exact factored math, ~5.4x Pascal/~3x 5090) + C4 continuous-feed RunOneJob. CUDA 12.8, archs sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120. LTO enabled. Built on home-1070, KAT-verified bit-equivalent (12/12 shares) vs internal ship-base 147e59f7."
+      "notes": "BTX v0.32.8 (PR58 upstreamed + CPU nonce-seed pipeline opt). CUDA 12.8, archs sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120. LTO enabled. Built on home-1070; KAT-verified bit-equivalent (matmul_digest at nonce 1 = ca43457e54ba7e7d5cd6dfbbf17583887ae78cb75391df4e2a0c1d941ff413d6) vs v0.32.5 production binary on the loose-target reference job."
     },
     "aarch64-linux": {
-      "sha256": "462551244c5a8a05bde294e2102baaecbbf77f5f9ee31aad76e6e9a34ade3a10",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.5/btx-gbt-solve-aarch64-linux-gnu-cuda13",
+      "sha256": "e4f03f4f91f019bfcc3d82291cfbcbd7e9f89cf309820f2d51a6c06cccab6be9",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.8/btx-gbt-solve-aarch64-linux-gnu-cuda13",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
-      "notes": "BTX v0.32.5 + PR58 GPU saturation kernels + C4 continuous-feed RunOneJob. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer. Requires CUDA 13.0+ runtime. Built via build-solver-aarch64.yml on GitHub ubuntu-24.04-arm. KAT-equivalent to x86_64 build by construction (same source + same patches); not GPU-tested on aarch64 host because GitHub runners have no GPU."
+      "notes": "BTX v0.32.8 (PR58 upstreamed + CPU nonce-seed pipeline opt). CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer. Requires CUDA 13.0+ runtime. Built via build-solver-aarch64.yml on GitHub ubuntu-24.04-arm. KAT-equivalent to x86_64 build by construction (same source + same patches); not GPU-tested on aarch64 host because GitHub runners have no GPU."
     },
     "aarch64-linux-cuda12": {
-      "sha256": "409aa27aecea8ca389b4afd0b625f866b457a8aef82255ccac87bd53bcb62c57",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.5/btx-gbt-solve-aarch64-linux-gnu-cuda12",
+      "sha256": "a738d4e8543a9a3224c5c94059d5668ade96dcbdcd76f118619eb8370a79104d",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.8/btx-gbt-solve-aarch64-linux-gnu-cuda12",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
-      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. BTX v0.32.5 + PR58 + C4. CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 — use cuda13 build for GB10). Built via build-solver-aarch64.yml on GitHub ubuntu-24.04-arm."
+      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. BTX v0.32.8 (PR58 upstreamed). CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 — use cuda13 build for GB10/Spark). Built via build-solver-aarch64.yml on GitHub ubuntu-24.04-arm."
     },
     "arm64-darwin": {
       "sha256": "6d773b8b4e74d5b538102c24f67503004c407d555d0201636632d93a05f6516a",
       "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-darwin-arm64",
       "min_required_sha256": null,
       "force_upgrade_reason": null,
-      "notes": "Apple Silicon Metal backend. CI verifies cpu_digest == metal_digest == reference_digest before publish."
+      "notes": "Apple Silicon Metal backend. CI verifies cpu_digest == metal_digest == reference_digest before publish. arm64-darwin entry still on btx-prebuilds-v0.32.2 pending an Apple Silicon rebuild from v0.32.8 source — defer to a future point release."
     }
   }
 }
