@@ -100,26 +100,22 @@ jobs:
           echo "Patches available:"
           ls -la "$PATCH_DIR"
 
-          # Apply patch 05 (cmake target — always needed) and conditionally apply
-          # 10/11 (PR#58 kernel opts). Both PR#58 patches were upstreamed in BTX
-          # v0.32.8; skip them if they're already present in the source tree.
+          # Apply patch 05 (cmake target — always needed).
+          # Patches 10 and 11 (PR#58 kernel opts: windowed SHA + factored matmul)
+          # were upstreamed in BTX v0.32.8 and are not applied here. Verify the
+          # upstream-merged code by signature greps below so we fail loud on a
+          # mis-tagged build (e.g. trying to build v0.32.5 with this workflow,
+          # which would NOT have the PR58 code and would silently produce a
+          # slower kernel).
           echo "=== applying 05-cmakelists-add-gbt-solve-target.patch ==="
           patch -p1 < "$PATCH_DIR/05-cmakelists-add-gbt-solve-target.patch"
 
-          for p in 10-pr58-oracle-accel-windowed-sha.patch 11-pr58-matmul-accel-factored-compression.patch; do
-            echo "=== checking $p ==="
-            if patch -p1 --dry-run -R --silent < "$PATCH_DIR/$p" > /dev/null 2>&1; then
-              echo "  -> already applied upstream (PR#58 in v0.32.8+); skipping"
-              continue
-            fi
-            if patch -p1 --dry-run --silent < "$PATCH_DIR/$p" > /dev/null 2>&1; then
-              echo "  -> applying"
-              patch -p1 < "$PATCH_DIR/$p"
-            else
-              echo "ERROR: $p neither applies cleanly nor is already present"
-              exit 1
-            fi
-          done
+          # Sanity-check PR#58 upstream signatures (only present in v0.32.8+).
+          if ! grep -q "WINDOWED SHA-256" src/cuda/oracle_accel.cu 2>/dev/null; then
+            echo "ERROR: PR#58 windowed SHA-256 not found in src/cuda/oracle_accel.cu — this workflow requires v0.32.8+ source"
+            exit 1
+          fi
+          echo "  PR#58 (windowed SHA + factored matmul) confirmed upstream in source tree"
 
           # Copy in btx-gbt-solve.cpp (full file; upstream tree doesn't have it).
           # v0.32.3 sets nMatMulNonceSeedHeight=125'000 in chainparams.cpp for
