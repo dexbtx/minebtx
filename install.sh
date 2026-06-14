@@ -52,16 +52,16 @@ set -euo pipefail
 # ─── Configurables ──────────────────────────────────────────────────────────
 # Pin the prebuilds release tag. install.sh always pulls this version.
 # Bump in lockstep with experiments/vast/prebuilds and pyproject.toml.
-PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.10}"
-EXPECTED_SHA256="${EXPECTED_SHA256:-2c93d27cb1b0060f038ec40e8f34e9f1c0faa09c97cffaaea062d548aea59141}"
+PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.11}"
+EXPECTED_SHA256="${EXPECTED_SHA256:-3f7bd3f7e92d07377459a14416fca1b8460e224540ba179bc3309e36af326853}"
 # Darwin arm64 (Apple Silicon + Metal) solver pin. Fill in after the first green
 # build-solver-macos-arm64 CI run (the workflow prints the sha256). Until then,
 # macOS installs intentionally fail rather than install an unverified binary.
 DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-361abdad3880fe8be4ff470c29238c90303c6bd78dcac3b15643607fc369002c}"
 # Linux aarch64 (Grace / GB10 Blackwell etc.) CUDA solver pins. Default CUDA
 # toolkit variant is cuda12; set DEXBTX_CUDA=cuda13 for newer-driver hosts.
-AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-059478f957433b09ff5f83916aa346538ec26dcc0689e7810b08d6a03f4ebfd0}"
-AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-c09a567eee4c97e5b183ffd77d037fb6d1dc161e14779f2de7f480585ca86f5c}"
+AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-ca911dc06c79900a89afccee778b437fd353b0b78c57df231c3bc3007b590196}"
+AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-8337f2fd0335849b5aa3b9841f03c548596affe0be9f0260691dc14959e312e2}"
 # Linux x86_64 AMD/ROCm (HIP) solver pin — EXPERIMENTAL. Selected when an AMD
 # GPU is present (rocm-smi) or DEXBTX_GPU=rocm. Correctness is enforced by an
 # install-time HIP-vs-CPU self-check below (the HIP kernel is unproven off real
@@ -136,13 +136,13 @@ case "$OS" in
             x86_64|amd64)
                 if [[ "${DEXBTX_GPU:-}" == "rocm" ]] || command -v rocm-smi >/dev/null 2>&1; then
                     # The experimental ROCm/HIP build is NOT published for the
-                    # v0.32.10 (MatMul-V3) release — its build workflow still
+                    # v0.32.11 (MatMul-V3) release — its build workflow still
                     # carries the pre-v0.32.8 PR#58 patch set and fails. Rather
                     # than 404 mid-download, fail clearly. AMD is a minority,
                     # experimental path; the NVIDIA/CPU x86_64 build below is the
                     # supported one.
-                    err "AMD/ROCm has no prebuilt solver for the v0.32.10 MatMul-V3 release yet. \
-Options: (1) force the NVIDIA/CPU x86_64 build with DEXBTX_GPU=none, or (2) build btx-gbt-solve from source against btxchain/btx v0.32.10. ROCm support will return in a later point release."
+                    err "AMD/ROCm has no prebuilt solver for the v0.32.11 MatMul-V3 release yet. \
+Options: (1) force the NVIDIA/CPU x86_64 build with DEXBTX_GPU=none, or (2) build btx-gbt-solve from source against btxchain/btx v0.32.11. ROCm support will return in a later point release."
                 fi
                 ;;
             aarch64|arm64)
@@ -287,7 +287,7 @@ else
     # GitHub keeps the install pinned to a specific release commit and
     # avoids a third-party package surface. Override DEXBTX_MINER_PKG_URL
     # to install from a fork or a different ref.
-    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.14.tar.gz}"
+    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.15.tar.gz}"
     log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
     pip_install --upgrade "$DEXBTX_MINER_PKG_URL"
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.15] - 2026-06-14 (all NVIDIA + Spark platforms → btx-prebuilds-v0.32.11; MatMul-V3 GPU-scan fix)
+
+### What
+- `.solver-channel.json` `x86_64-linux` entry: sha → `3f7bd3f7e92d07377459a14416fca1b8460e224540ba179bc3309e36af326853`, url → `btx-prebuilds-v0.32.11/btx-gbt-solve`. CUDA 12.8, native cubins `sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120` (GTX 10-series → RTX 50-series) + LTO. Built on home-1070. `min_required_sha256` set to the same so hosts on the v0.32.10 binary force-upgrade.
+- `.solver-channel.json` `aarch64-linux` + `aarch64-linux-cuda12` entries: sha → `ca911dc06c79900a89afccee778b437fd353b0b78c57df231c3bc3007b590196`, url → `btx-prebuilds-v0.32.11/btx-gbt-solve-aarch64-linux-gnu-cuda12`. CUDA 12.8, archs `sm_80;sm_90;sm_120`. Built via `build-solver-aarch64.yml`.
+- `.solver-channel.json` `aarch64-linux-cuda13` entry: sha → `8337f2fd0335849b5aa3b9841f03c548596affe0be9f0260691dc14959e312e2`, url → `btx-prebuilds-v0.32.11/btx-gbt-solve-aarch64-linux-gnu-cuda13`. CUDA 13.0, archs `sm_80;sm_90;sm_120;sm_121` (Grace + GB10/Spark). Built via `build-solver-aarch64.yml`.
+- `arm64-darwin` entry unchanged (stays on `btx-prebuilds-v0.32.10`; Metal rebuild deferred — outside this release's NVIDIA+Spark scope).
+- `pyproject.toml`, `src/dexbtx_miner/__init__.py`, `install.sh` bumped to `0.4.15` / `btx-prebuilds-v0.32.11` / the new SHAs in lockstep.
+- All Linux binaries built from `btxchain/btx` tag `v0.32.11` (commit `601b2cc`) + patch `05-cmakelists-add-gbt-solve-target.patch` + `btx-gbt-solve.cpp`.
+
+### Why
+v0.32.10 (the v0.4.14 fork release) shipped the MatMul-V3 GPU pre-hash scan half-wired: at/after mainnet block 130,500 GPU miners fell back to the slow CPU per-nonce path (util ~1-7%, hashrate cratered). Shares stayed consensus-VALID — a throughput regression, not a correctness bug. Upstream v0.32.11 is the official fix (V3 seed builder added to the CUDA + Metal scan kernels, `IsMatMulParentMtpSeedActive` gates removed, `SetDeterministicMatMulSeeds` fails closed, + a CUDA CI parity lane asserting scan flags == `CheckMatMulPreHashGate`).
+
+### Validation
+- home-1070 (GTX 1070 / sm_61), 10 min via the real wrapper: 99% GPU util with the scan engaging (vs 1-7% on v0.32.10), 54 shares / 0 rejects / 0 stale, code23=0.
+- x86_64 fat binary: `cuobjdump` confirms all 7 cubins embedded; functional re-run 99% util / 0 rejects.
+- aarch64 cuda12 + cuda13: CI bit-equivalence CPU parity test passed (consensus-correct); cubins verified structurally.
+
+### Rollout
+All NVIDIA + Spark hosts auto-upgrade to the v0.32.11 solver on next miner restart (solver_updater `min_required` gate); the wrapper auto-updates to 0.4.15 via `wrapper_updater`.
+
 ## [0.4.13] - 2026-06-13 (all platforms → btx-prebuilds-v0.32.8)
 
 ### What
