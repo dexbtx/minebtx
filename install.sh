@@ -52,15 +52,15 @@ set -euo pipefail
 # ─── Configurables ──────────────────────────────────────────────────────────
 # Pin the prebuilds release tag. install.sh always pulls this version.
 # Bump in lockstep with experiments/vast/prebuilds and pyproject.toml.
-PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.8}"
-EXPECTED_SHA256="${EXPECTED_SHA256:-50ec2e4ecd685c7e0e1199746405ee0bd94bc70a40f63bd1fa7989992a89b799}"
+PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.10}"
+EXPECTED_SHA256="${EXPECTED_SHA256:-2c93d27cb1b0060f038ec40e8f34e9f1c0faa09c97cffaaea062d548aea59141}"
 # Darwin arm64 (Apple Silicon + Metal) solver pin. Fill in after the first green
 # build-solver-macos-arm64 CI run (the workflow prints the sha256). Until then,
 # macOS installs intentionally fail rather than install an unverified binary.
-DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-6d773b8b4e74d5b538102c24f67503004c407d555d0201636632d93a05f6516a}"
+DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-361abdad3880fe8be4ff470c29238c90303c6bd78dcac3b15643607fc369002c}"
 # Linux aarch64 (Grace / GB10 Blackwell etc.) CUDA solver pins. Default CUDA
 # toolkit variant is cuda12; set DEXBTX_CUDA=cuda13 for newer-driver hosts.
-AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-a738d4e8543a9a3224c5c94059d5668ade96dcbdcd76f118619eb8370a79104d}"
+AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-059478f957433b09ff5f83916aa346538ec26dcc0689e7810b08d6a03f4ebfd0}"
 AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-e4f03f4f91f019bfcc3d82291cfbcbd7e9f89cf309820f2d51a6c06cccab6be9}"
 # Linux x86_64 AMD/ROCm (HIP) solver pin — EXPERIMENTAL. Selected when an AMD
 # GPU is present (rocm-smi) or DEXBTX_GPU=rocm. Correctness is enforced by an
