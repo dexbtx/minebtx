@@ -1,36 +1,43 @@
 {
-  "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred and supports any platform key the wrapper can detect.",
-  "version": "0.4.13",
-  "released_at": "2026-06-13",
-  "notes": "v0.4.13 - all CUDA-Linux platforms now point at btx-prebuilds-v0.32.8. BTX v0.32.8 ships recovery-exit fee-replacement, mempool/reorg hardening, mining health RPC, and CPU nonce-seed pipeline optimization (perf gain hardware-dependent; most visible on CPU-bound Blackwell/Grace rigs). Consensus rules unchanged from v0.32.5. PR58 (windowed SHA + factored compression) is upstreamed in v0.32.8 source; only patch 05 (cmake target) is still applied at build time. arm64-darwin entry unchanged (still on v0.32.2 pending an Apple Silicon rebuild from the v0.32.8 source tree). No wrapper code changes from v0.4.11; the v0.4.12 session_gen experiment was tested and did not deliver and was never published.",
+  "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater (binary) and dexbtx_miner.wrapper_updater (the top-level `version` field) on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry — a host whose binary != min that cannot download the new one will REFUSE to mine. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred.",
+  "version": "0.4.14",
+  "released_at": "2026-06-14",
+  "notes": "v0.4.14 — MANDATORY for the MatMul-V3 fork (parent-block-MTP seed binding) that activates at mainnet height 130,500. All Linux/macOS platforms now point at btx-prebuilds-v0.32.10 (BTX v0.32.10 source, tag 4519f0a7). Below 130,500 the V2 path is unchanged (fully backwards compatible); at/after 130,500 anything older than v0.32.10 produces 100% invalid shares, so every platform carries min_required_sha256 to force the upgrade before the fork. Carries our standing build patches (recovery-exit fee-replacement filter, GBT cache, cmake target). KAT-verified: Rust share-validator V3 seed derivation == btxd consensus byte-for-byte (gold-standard test v3_matches_btxd_consensus_reference). arm64-darwin rebuilt from v0.32.10 source. aarch64-linux default now tracks the cuda12 v0.32.10 build (broadest ARM coverage); native sm_121/cuda13 build is published as the aarch64-linux-cuda13 opt-in key.",
   "platforms": {
     "x86_64-linux": {
-      "sha256": "50ec2e4ecd685c7e0e1199746405ee0bd94bc70a40f63bd1fa7989992a89b799",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.8/btx-gbt-solve",
-      "min_required_sha256": null,
-      "force_upgrade_reason": null,
-      "notes": "BTX v0.32.8 (PR58 upstreamed + CPU nonce-seed pipeline opt). CUDA 12.8, archs sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120. LTO enabled. Built on home-1070; KAT-verified bit-equivalent (matmul_digest at nonce 1 = ca43457e54ba7e7d5cd6dfbbf17583887ae78cb75391df4e2a0c1d941ff413d6) vs v0.32.5 production binary on the loose-target reference job."
+      "sha256": "2c93d27cb1b0060f038ec40e8f34e9f1c0faa09c97cffaaea062d548aea59141",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.10/btx-gbt-solve",
+      "min_required_sha256": "2c93d27cb1b0060f038ec40e8f34e9f1c0faa09c97cffaaea062d548aea59141",
+      "force_upgrade_reason": "MatMul-V3 fork at mainnet block 130,500 — pre-v0.32.10 solvers produce 100% invalid shares after the fork.",
+      "notes": "BTX v0.32.10 / matmul-v3. CUDA 12.8, native cubins sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120 (GTX 10-series through RTX 50-series). LTO enabled. Built on home-1070; V3 seed derivation KAT-verified bit-equivalent to btxd consensus."
     },
     "aarch64-linux": {
-      "sha256": "e4f03f4f91f019bfcc3d82291cfbcbd7e9f89cf309820f2d51a6c06cccab6be9",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.8/btx-gbt-solve-aarch64-linux-gnu-cuda13",
-      "min_required_sha256": null,
-      "force_upgrade_reason": null,
-      "notes": "BTX v0.32.8 (PR58 upstreamed + CPU nonce-seed pipeline opt). CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer. Requires CUDA 13.0+ runtime. Built via build-solver-aarch64.yml on GitHub ubuntu-24.04-arm. KAT-equivalent to x86_64 build by construction (same source + same patches); not GPU-tested on aarch64 host because GitHub runners have no GPU."
+      "sha256": "059478f957433b09ff5f83916aa346538ec26dcc0689e7810b08d6a03f4ebfd0",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.10/btx-gbt-solve-aarch64-linux-gnu-cuda12",
+      "min_required_sha256": "059478f957433b09ff5f83916aa346538ec26dcc0689e7810b08d6a03f4ebfd0",
+      "force_upgrade_reason": "MatMul-V3 fork at mainnet block 130,500 — pre-v0.32.10 solvers produce 100% invalid shares after the fork.",
+      "notes": "BTX v0.32.10 / matmul-v3. CUDA 12.8, archs sm_80;sm_90;sm_120 (Ampere through Blackwell consumer). Default ARM entry. CUDA-13-only hosts (GB10/Spark, sm_121) should set DEXBTX_PLATFORM_KEY=aarch64-linux-cuda13. Built via build-solver-aarch64.yml."
     },
     "aarch64-linux-cuda12": {
-      "sha256": "a738d4e8543a9a3224c5c94059d5668ade96dcbdcd76f118619eb8370a79104d",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.8/btx-gbt-solve-aarch64-linux-gnu-cuda12",
-      "min_required_sha256": null,
-      "force_upgrade_reason": null,
-      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. BTX v0.32.8 (PR58 upstreamed). CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 — use cuda13 build for GB10/Spark). Built via build-solver-aarch64.yml on GitHub ubuntu-24.04-arm."
+      "sha256": "059478f957433b09ff5f83916aa346538ec26dcc0689e7810b08d6a03f4ebfd0",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.10/btx-gbt-solve-aarch64-linux-gnu-cuda12",
+      "min_required_sha256": "059478f957433b09ff5f83916aa346538ec26dcc0689e7810b08d6a03f4ebfd0",
+      "force_upgrade_reason": "MatMul-V3 fork at mainnet block 130,500 — pre-v0.32.10 solvers produce 100% invalid shares after the fork.",
+      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. BTX v0.32.10 / matmul-v3. CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 — use cuda13 build for GB10/Spark). Built via build-solver-aarch64.yml."
+    },
+    "aarch64-linux-cuda13": {
+      "sha256": "c09a567eee4c97e5b183ffd77d037fb6d1dc161e14779f2de7f480585ca86f5c",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.10/btx-gbt-solve-aarch64-linux-gnu-cuda13",
+      "min_required_sha256": "c09a567eee4c97e5b183ffd77d037fb6d1dc161e14779f2de7f480585ca86f5c",
+      "force_upgrade_reason": "MatMul-V3 fork at mainnet block 130,500 — pre-v0.32.10 solvers produce 100% invalid shares after the fork.",
+      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda13. BTX v0.32.10 / matmul-v3. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer needing a CUDA-13 runtime. Built via build-solver-aarch64.yml."
     },
     "arm64-darwin": {
-      "sha256": "6d773b8b4e74d5b538102c24f67503004c407d555d0201636632d93a05f6516a",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.2/btx-gbt-solve-darwin-arm64",
-      "min_required_sha256": null,
-      "force_upgrade_reason": null,
-      "notes": "Apple Silicon Metal backend. CI verifies cpu_digest == metal_digest == reference_digest before publish. arm64-darwin entry still on btx-prebuilds-v0.32.2 pending an Apple Silicon rebuild from v0.32.8 source — defer to a future point release."
+      "sha256": "361abdad3880fe8be4ff470c29238c90303c6bd78dcac3b15643607fc369002c",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.10/btx-gbt-solve-darwin-arm64",
+      "min_required_sha256": "361abdad3880fe8be4ff470c29238c90303c6bd78dcac3b15643607fc369002c",
+      "force_upgrade_reason": "MatMul-V3 fork at mainnet block 130,500 — pre-v0.32.10 solvers produce 100% invalid shares after the fork.",
+      "notes": "Apple Silicon Metal backend, rebuilt from BTX v0.32.10 source. CI verifies cpu_digest == metal_digest == reference_digest before publish."
     }
   }
 }

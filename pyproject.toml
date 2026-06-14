@@ -24,8 +24,8 @@ dexbtx-miner = "dexbtx_miner.__main__:main"
 # the binary, verifies this hash, refuses to run on mismatch. Bump this
 # field in lockstep with the prebuilds release.
 [tool.dexbtx-miner.solver]
-expected_sha256 = "b9251a06133abb90a71d714c3a83ea9accb71ba81352b6226ca50c7e5fae5032"
-prebuilds_release = "btx-prebuilds-v0.32.2"
+expected_sha256 = "2c93d27cb1b0060f038ec40e8f34e9f1c0faa09c97cffaaea062d548aea59141"
+prebuilds_release = "btx-prebuilds-v0.32.10"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dexbtx_miner"]

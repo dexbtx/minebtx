@@ -61,7 +61,7 @@ DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-361abdad3880fe8be4ff470c29238c90303c
 # Linux aarch64 (Grace / GB10 Blackwell etc.) CUDA solver pins. Default CUDA
 # toolkit variant is cuda12; set DEXBTX_CUDA=cuda13 for newer-driver hosts.
 AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-059478f957433b09ff5f83916aa346538ec26dcc0689e7810b08d6a03f4ebfd0}"
-AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-e4f03f4f91f019bfcc3d82291cfbcbd7e9f89cf309820f2d51a6c06cccab6be9}"
+AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-c09a567eee4c97e5b183ffd77d037fb6d1dc161e14779f2de7f480585ca86f5c}"
 # Linux x86_64 AMD/ROCm (HIP) solver pin — EXPERIMENTAL. Selected when an AMD
 # GPU is present (rocm-smi) or DEXBTX_GPU=rocm. Correctness is enforced by an
 # install-time HIP-vs-CPU self-check below (the HIP kernel is unproven off real
@@ -135,13 +135,14 @@ case "$OS" in
         case "$ARCH" in
             x86_64|amd64)
                 if [[ "${DEXBTX_GPU:-}" == "rocm" ]] || command -v rocm-smi >/dev/null 2>&1; then
-                    log "AMD/ROCm detected — using the EXPERIMENTAL HIP solver build."
-                    SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve-x86_64-linux-gnu-rocm"
-                    EXPECTED_SHA256="${ROCM_X86_64_SHA256}"
-                    IS_ROCM=1
-                    if [[ "$EXPECTED_SHA256" == "REPLACE_AFTER_FIRST_ROCM_BUILD" ]]; then
-                        err "ROCm solver SHA pin not set yet — run build-solver-rocm (publish) then set ROCM_X86_64_SHA256."
-                    fi
+                    # The experimental ROCm/HIP build is NOT published for the
+                    # v0.32.10 (MatMul-V3) release — its build workflow still
+                    # carries the pre-v0.32.8 PR#58 patch set and fails. Rather
+                    # than 404 mid-download, fail clearly. AMD is a minority,
+                    # experimental path; the NVIDIA/CPU x86_64 build below is the
+                    # supported one.
+                    err "AMD/ROCm has no prebuilt solver for the v0.32.10 MatMul-V3 release yet. \
+Options: (1) force the NVIDIA/CPU x86_64 build with DEXBTX_GPU=none, or (2) build btx-gbt-solve from source against btxchain/btx v0.32.10. ROCm support will return in a later point release."
                 fi
                 ;;
             aarch64|arm64)
@@ -286,7 +287,7 @@ else
     # GitHub keeps the install pinned to a specific release commit and
     # avoids a third-party package surface. Override DEXBTX_MINER_PKG_URL
     # to install from a fork or a different ref.
-    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.13.tar.gz}"
+    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.14.tar.gz}"
     log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
     pip_install --upgrade "$DEXBTX_MINER_PKG_URL"
 
