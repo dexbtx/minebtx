@@ -76,6 +76,10 @@ struct Options {
     // Eliminates CUDA-context-init + cubin-load cost per slice (~5s of
     // 25s slice = 20% duty-cycle loss on the per-subprocess model).
     bool daemon_mode{false};
+    // Diagnostic: print the consensus-derived seed_a/seed_b (V2 or V3 per
+    // block_height + parent_mtp) for the given header, then exit. Lets us
+    // bit-exact-validate the pool/Rust seed derivation against btxd's.
+    bool emit_seeds{false};
 };
 
 class ScopedEnvOverride {
@@ -163,6 +167,7 @@ void PrintUsage(std::ostream& out)
         << "  --async <0|1>\n"
         << "  --pool-slots <N>\n"
         << "  --daemon                stay alive, read JSON jobs from stdin\n"
+        << "  --emit-seeds            print consensus-derived seed_a/seed_b (V2/V3) for the header and exit\n"
         << "Outputs ONE JSON line on stdout, see source for schema.\n"
         << "In --daemon mode, ignores required CLI fields; each stdin\n"
         << "line is a job: {version,prev_hash,merkle_root,time,bits,\n"
@@ -220,6 +225,7 @@ bool ParseArgs(int argc, char* argv[], Options& options)
         else if (arg == "--async")              { val = need_value(i, arg); if (!val) return false; options.async_override = val; }
         else if (arg == "--pool-slots")         { val = need_value(i, arg); if (!val) return false; options.pool_slots_override = val; }
         else if (arg == "--daemon")             { options.daemon_mode = true; }
+        else if (arg == "--emit-seeds")         { options.emit_seeds = true; }
         else {
             std::cerr << "error: unknown arg: " << arg << "\n";
             return false;
@@ -274,6 +280,23 @@ bool RunOneJob(Options& options, const Consensus::Params& consensus)
     header.seed_a = options.seed_a;
     header.seed_b = options.seed_b;
     header.matmul_digest.SetNull();
+
+    if (options.emit_seeds) {
+        // Diagnostic: derive seeds via btxd's own consensus function (V2 or V3
+        // per block_height + parent_mtp) and print them, then exit. Used to
+        // bit-exact-validate the pool/Rust seed derivation against consensus.
+        CBlockHeader h{header};
+        const bool ok = SetDeterministicMatMulSeeds(h, consensus, options.block_height, options.parent_mtp);
+        UniValue out(UniValue::VOBJ);
+        out.pushKV("ok", ok);
+        out.pushKV("block_height", options.block_height);
+        out.pushKV("nonce64", static_cast<uint64_t>(options.nonce_start));
+        out.pushKV("parent_mtp", options.parent_mtp.has_value() ? UniValue(static_cast<int64_t>(*options.parent_mtp)) : UniValue());
+        out.pushKV("seed_a", h.seed_a.GetHex());
+        out.pushKV("seed_b", h.seed_b.GetHex());
+        std::cout << out.write() << std::endl;
+        return ok;
+    }
 
     std::atomic<bool> abort_flag{false};
     std::vector<uint32_t> matrix_c_data;
