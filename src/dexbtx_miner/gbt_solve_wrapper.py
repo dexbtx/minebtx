@@ -62,6 +62,10 @@ class SolveChallenge:
     # digest <= share_target instead of the block target. Requires the
     # patched btx-gbt-solve binary (--share-target flag, June 2026+).
     share_target_hex: str | None = None
+    # Optional: parent block median-time-past (int). Required by the solver for
+    # V3 seed derivation at height >= 130,500 (--parent-mtp / job["parent_mtp"]).
+    # None below activation or from pre-V3 pools. Needs btx-gbt-solve v0.4.14+.
+    parent_mtp: int | None = None
 
 
 @dataclasses.dataclass
@@ -297,6 +301,10 @@ class GbtSolveWrapper:
         }
         if challenge.share_target_hex:
             job["share_target"] = challenge.share_target_hex
+        # V3 (height >= 130,500): only emit when present so the solver's
+        # reset-if-absent logic keeps a stale value from leaking between jobs.
+        if challenge.parent_mtp is not None:
+            job["parent_mtp"] = challenge.parent_mtp
 
         # Serialize daemon I/O — only one job in flight at a time
         async with self._daemon_lock:

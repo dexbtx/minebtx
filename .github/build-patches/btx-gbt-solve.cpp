@@ -53,6 +53,10 @@ struct Options {
     uint32_t matmul_r{8};
     uint32_t epsilon_bits{MAINNET_LIVE_LIKE_EPSILON_BITS};
     int32_t block_height{-1};
+    // Parent block's median-time-past. Required for V3 seed derivation at
+    // height >= nMatMulParentMtpSeedHeight (130,500); ignored below activation.
+    // Supplied via --parent-mtp (one-shot) or job["parent_mtp"] (daemon).
+    std::optional<int64_t> parent_mtp;
     uint64_t nonce_start{0};
     uint64_t max_tries{100'000'000ULL};
     // Optional 256-bit BE share target. When set the solver returns early
@@ -144,6 +148,7 @@ void PrintUsage(std::ostream& out)
         << "  --seed-b <hex64>\n"
         << "  --block-height <int>\n"
         << "Optional:\n"
+        << "  --parent-mtp <int64>    parent block median-time-past; required at height >= 130500 (V3)\n"
         << "  --matmul-n <uint16>     default 512\n"
         << "  --matmul-b <uint32>     default 16\n"
         << "  --matmul-r <uint32>     default 8\n"
@@ -205,6 +210,7 @@ bool ParseArgs(int argc, char* argv[], Options& options)
         else if (arg == "--epsilon-bits") { val = need_value(i, arg); if (!val) return false; options.epsilon_bits = static_cast<uint32_t>(*ParseUintArg(val)); }
         else if (arg == "--share-target") { val = need_value(i, arg); if (!val) return false; options.share_target = ParseUint256Hex(val, "--share-target"); }
         else if (arg == "--block-height") { val = need_value(i, arg); if (!val) return false; options.block_height = static_cast<int32_t>(*ParseUintArg(val)); }
+        else if (arg == "--parent-mtp")   { val = need_value(i, arg); if (!val) return false; options.parent_mtp = static_cast<int64_t>(*ParseUintArg(val)); }
         else if (arg == "--nonce-start")  { val = need_value(i, arg); if (!val) return false; options.nonce_start = *ParseUintArg(val); }
         else if (arg == "--max-tries")    { val = need_value(i, arg); if (!val) return false; options.max_tries = *ParseUintArg(val); }
         else if (arg == "--max-seconds")  { val = need_value(i, arg); if (!val) return false; options.max_seconds = std::stod(val); }
@@ -309,7 +315,8 @@ bool RunOneJob(Options& options, const Consensus::Params& consensus)
         header.matmul_digest.SetNull();
         const bool found_one = SolveMatMul(header, consensus, tries_budget,
                                            options.block_height, &abort_flag,
-                                           &matrix_c_data, share_target_ptr);
+                                           &matrix_c_data, share_target_ptr,
+                                           options.parent_mtp);
         if (!found_one) break;
         const std::string dg = header.matmul_digest.GetHex();
         const bool is_block = block_target
@@ -398,6 +405,10 @@ bool UpdateJobFromJson(const std::string& line, Options& options)
     if (job.exists("seed_a"))       options.seed_a       = ParseUint256Hex(job["seed_a"].get_str(), "seed_a");
     if (job.exists("seed_b"))       options.seed_b       = ParseUint256Hex(job["seed_b"].get_str(), "seed_b");
     if (job.exists("block_height")) options.block_height = static_cast<int32_t>(job["block_height"].getInt<int64_t>());
+    // V3 parent-MTP (height >= 130500). Reset when absent so a stale value from
+    // a prior job can never leak into the next one's seed derivation.
+    if (job.exists("parent_mtp")) options.parent_mtp = job["parent_mtp"].getInt<int64_t>();
+    else options.parent_mtp.reset();
     if (job.exists("nonce_start"))  options.nonce_start  = static_cast<uint64_t>(job["nonce_start"].getInt<int64_t>());
     if (job.exists("max_tries"))    options.max_tries    = static_cast<uint64_t>(job["max_tries"].getInt<int64_t>());
     if (job.exists("max_seconds"))  options.max_seconds  = job["max_seconds"].get_real();
@@ -443,6 +454,12 @@ int main(int argc, char* argv[])
     // this, the miner would use pool-provided static seeds post-fork and the
     // pool's per-nonce digest recomputation would mismatch every share.
     consensus.nMatMulNonceSeedHeight = 125'000;
+    // Mainnet MatMul V3 parent-MTP-seed activation (BTX v0.32.10, height 130,500).
+    // At/above this, SolveMatMul derives seeds via DeterministicMatMulSeedV3 which
+    // additionally binds the parent block's median-time-past (supplied per job via
+    // --parent-mtp / job["parent_mtp"]). Below it, behavior is unchanged (V2). Keep
+    // this EXACTLY at 130,500 — activating early would invalidate pre-fork blocks.
+    consensus.nMatMulParentMtpSeedHeight = 130'500;
 
     if (!options.daemon_mode) {
         // One-shot path: run a single job from the CLI-parsed options, exit.

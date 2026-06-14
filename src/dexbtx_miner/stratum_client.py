@@ -112,6 +112,10 @@ class Job:
             matmul_r=int(self.matmul.get("matmul_r", 8)),
             epsilon_bits=int(self.matmul.get("epsilon_bits", 18)),
             share_target_hex=share_target_hex,
+            # V3 (height >= 130,500): parent block median-time-past. Optional and
+            # additive — absent from pre-v3 pools; harmless below activation since
+            # the solver ignores it until 130,500. NOT in required_matmul_keys.
+            parent_mtp=(int(self.matmul["parent_mtp"]) if "parent_mtp" in self.matmul else None),
         )
 
 
