@@ -47,6 +47,9 @@ class MinerConfig:
     # rarely the binding limit — `solver_max_seconds_per_slice` bounds
     # each slice first on every modern GPU. Effectively a safety cap so a
     # broken solver can't run away with a single multi-billion-nonce slice.
+    # NOTE: raising this to 4B was tested 2026-06-14 and BROKE share production
+    # (solver returned 0 immediately, ~5300 empty dispatches/sec) — do NOT raise
+    # blindly; the daemon/window-builder has a slice-size bug to find first.
     nonces_per_slice: int = 20_000_000
 
     # How long a single solver slice runs before returning. Shorter slices
@@ -66,6 +69,11 @@ class MinerConfig:
     # Reconnect with exponential backoff bounded by these.
     reconnect_initial_s: float = 1.0
     reconnect_max_s: float = 60.0
+
+    # v0.4.16 (B): how often a running miner re-checks the solver channel for a
+    # force-published solver and auto-upgrades (re-exec) without a manual
+    # restart. Floored at 300s. Set DEXBTX_NO_SOLVER_RECHECK=1 to disable.
+    solver_recheck_interval_secs: float = 1800.0
 
     log_level: str = "INFO"
 

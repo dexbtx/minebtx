@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import dataclasses
 import logging
+import os
 import sys
 from pathlib import Path
 
+from . import hardware
 from .config import MinerConfig, load_yaml_config
 from .solver_updater import SolverUpdateRequired, maybe_update_solver
 from .stratum_client import StratumClient
@@ -110,6 +113,55 @@ def _make_argparser() -> argparse.ArgumentParser:
     return ap
 
 
+def _reexec_for_solver_update() -> None:
+    """Replace this process with a fresh one (same argv) so the newly
+    downloaded solver binary + a fresh daemon are picked up cleanly. Mirrors
+    wrapper_updater's re-exec. Does not return on success."""
+    new_env = os.environ.copy()
+    new_env["DEXBTX_SOLVER_JUST_UPGRADED"] = "1"
+    try:
+        os.execvpe(sys.executable, [sys.executable, *sys.argv], new_env)
+    except OSError as e:
+        log.error("periodic solver re-check: execv failed: %s; continuing on current", e)
+
+
+async def _solver_update_watcher(cfg: MinerConfig) -> None:
+    """v0.4.16 (B): periodically re-check the solver channel so a long-running
+    miner picks up a force-published solver (new `min_required_sha256`) WITHOUT
+    a manual restart — the startup-only `maybe_update_solver` never re-fired
+    before. On an actual binary change we re-exec to load it. Fail-open: every
+    error is logged, never crashes mining. Opt out with DEXBTX_NO_SOLVER_RECHECK.
+    """
+    if os.environ.get("DEXBTX_NO_SOLVER_RECHECK"):
+        log.info("periodic solver re-check: disabled via env")
+        return
+    interval = max(300.0, float(cfg.solver_recheck_interval_secs))
+    loop = asyncio.get_event_loop()
+    log.info("periodic solver re-check: every %.0f min", interval / 60.0)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            before = hardware.solver_sha256_hex(cfg.gbt_solve_path)
+            # maybe_update_solver does blocking network + file IO — keep it off
+            # the event loop so share submission isn't stalled.
+            await loop.run_in_executor(None, maybe_update_solver, cfg.gbt_solve_path)
+            after = hardware.solver_sha256_hex(cfg.gbt_solve_path)
+            if before and after and before != after:
+                log.warning(
+                    "periodic solver re-check: solver updated %s -> %s; re-exec to load it",
+                    before[:8], after[:8],
+                )
+                _reexec_for_solver_update()
+        except SolverUpdateRequired as e:
+            log.error(
+                "periodic solver re-check: MANDATORY solver upgrade unsatisfied: %s "
+                "(still mining on current binary — fix the host; shares may be rejected)",
+                e,
+            )
+        except Exception as e:  # noqa: BLE001 — fail-open by design
+            log.warning("periodic solver re-check failed (will retry next cycle): %s", e)
+
+
 async def _run(cfg: MinerConfig) -> int:
     _setup_logging(cfg.log_level)
     log.info("dexbtx-miner starting")
@@ -131,10 +183,17 @@ async def _run(cfg: MinerConfig) -> int:
         return 1
 
     client = StratumClient(cfg)
+    # v0.4.16 (B): background watcher that re-checks the solver channel so
+    # long-running rigs auto-upgrade the solver without a manual restart.
+    watcher = asyncio.create_task(_solver_update_watcher(cfg))
     try:
         await client.run_forever()
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("miner stopping")
+    finally:
+        watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await watcher
     log.info("totals: accepted=%d rejected=%d blocks=%d",
              client.shares_accepted, client.shares_rejected, client.blocks_found)
     return 0
