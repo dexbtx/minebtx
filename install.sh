@@ -53,7 +53,7 @@ set -euo pipefail
 # Pin the prebuilds release tag. install.sh always pulls this version.
 # Bump in lockstep with experiments/vast/prebuilds and pyproject.toml.
 PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.11}"
-EXPECTED_SHA256="${EXPECTED_SHA256:-3f7bd3f7e92d07377459a14416fca1b8460e224540ba179bc3309e36af326853}"
+EXPECTED_SHA256="${EXPECTED_SHA256:-3fbc9d71350db2b686a91b5768405a19f81246346a94bf70a151dd0b762c12f3}"
 # Darwin arm64 (Apple Silicon + Metal) solver pin. Fill in after the first green
 # build-solver-macos-arm64 CI run (the workflow prints the sha256). Until then,
 # macOS installs intentionally fail rather than install an unverified binary.
@@ -326,8 +326,16 @@ log "solver installed → $SOLVER_PATH"
 HELP_OUT="$("$SOLVER_PATH" --help 2>&1 || true)"
 if echo "$HELP_OUT" | grep -q "share-target"; then
     log "smoke-test: --share-target flag present ✓"
+elif echo "$HELP_OUT" | grep -qiE "error while loading shared libraries|cannot open shared object|libcudart"; then
+    # The binary couldn't even load — almost always a missing CUDA runtime
+    # (e.g. libcudart.so.12 absent on a CUDA-13-only host). This is NOT a
+    # "wrong binary" problem; --help never ran. v0.32.11+ solvers are now
+    # statically linked and shouldn't hit this.
+    MISSING="$(echo "$HELP_OUT" | grep -oE 'lib[a-zA-Z0-9._-]+\.so[0-9.]*' | head -1)"
+    echo "$HELP_OUT" | tail -3 >&2
+    err "solver binary failed to LOAD (missing ${MISSING:-a shared library}), so its flags couldn't be read. This is a CUDA-runtime mismatch, not a wrong binary. Fix: re-run install to pull the latest statically-linked solver, or install the matching CUDA runtime (e.g. 'pip install nvidia-cuda-runtime-cu12' + add its lib dir to LD_LIBRARY_PATH). Aborting."
 else
-    err "installed solver lacks --share-target flag (the patch this release needs). Aborting."
+    err "installed solver lacks the --share-target flag (the patch this release needs). --help output: $(echo "$HELP_OUT" | head -2 | tr '\n' ' '). Aborting."
 fi
 
 # ─── Config ─────────────────────────────────────────────────────────────────
