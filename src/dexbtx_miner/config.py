@@ -81,6 +81,32 @@ class MinerConfig:
     # restart. Floored at 300s. Set DEXBTX_NO_SOLVER_RECHECK=1 to disable.
     solver_recheck_interval_secs: float = 1800.0
 
+    # ── v0.4.18 solver auto-heal ────────────────────────────────────────────
+    # The long-running solver daemon can latch a bad runtime state (gross-wrong
+    # V3 digests, or a hang) — typically around a pool restart's job
+    # discontinuity — and then mine 0 valid shares until the *process* is
+    # restarted. A pool reconnect does NOT clear it (the daemon persists across
+    # stratum reconnects). This watchdog bounces the solver daemon when it
+    # detects the wedge; the next slice respawns a fresh daemon. Proven on
+    # home-1070 (restart → revived; reconnect/kick → did not).
+    #
+    # Triggers (work-proportional, so ramp-ups / slow GPUs / high vardiff don't
+    # false-trip — neither is a naive wall-clock-since-accept):
+    #   B (wrong-digest): N consecutive submitted-and-rejected shares with ZERO
+    #     accepts in between. Resets to 0 on ANY accept. A rig must actually FIND
+    #     and submit N candidates and have the pool reject ALL — a healthy reject
+    #     rate (~0-5%) never reaches N; a cold-start/slow rig hasn't found N yet.
+    #   A (hang): the solver returns NO result (slice completion) for this many
+    #     seconds while the process is alive. A healthy solver completes a slice
+    #     every few seconds, so this is unambiguous (the home-1070 case, where
+    #     a/r/b froze and B can never fire because nothing is submitted).
+    heal_enabled: bool = True
+    heal_consec_rejects: int = 8           # trigger B threshold
+    heal_solver_stall_secs: float = 90.0   # trigger A threshold
+    heal_first_slice_grace_secs: float = 120.0  # cold-start grace for trigger A
+    heal_cooldown_secs: float = 300.0      # min between bounces (escalates if heals don't help)
+    heal_check_interval_secs: float = 15.0 # watchdog evaluation cadence
+
     log_level: str = "INFO"
 
 

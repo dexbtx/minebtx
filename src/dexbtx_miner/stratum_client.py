@@ -163,6 +163,16 @@ class StratumClient:
         self._difficulty = 1.0
         self._solver_task: asyncio.Task | None = None
         self._metrics_task: asyncio.Task | None = None
+        self._heal_task: asyncio.Task | None = None
+        # ── v0.4.18 solver auto-heal state (see config.heal_*) ──────────────
+        # All monotonic() timestamps; reset on every (re)connect so a pool
+        # restart's reconnect starts a fresh window and can't self-trip.
+        self._session_started_at = time.monotonic()
+        self._last_accept_at = time.monotonic()
+        self._last_solver_result_at = time.monotonic()
+        self._consec_rejects = 0          # trigger B: rejects since last accept
+        self._last_heal_at = 0.0
+        self._heals_without_accept = 0    # escalates cooldown if heals don't help
         # v5.0: session_id is a local UUID echoed in periodic metrics so the
         # pool can correlate `worker.report_metrics` to a single connection
         # even if a worker reconnects mid-window.
@@ -201,8 +211,17 @@ class StratumClient:
             # the reader resolves, so without this we'd deadlock on subscribe.
             reader_task = asyncio.create_task(self._reader_loop())
             await self._handshake()
+            # v0.4.18 — fresh auto-heal window per session: a reconnect (e.g.
+            # after a pool restart) must not count pre-reconnect silence/rejects.
+            _now = time.monotonic()
+            self._session_started_at = _now
+            self._last_accept_at = _now
+            self._last_solver_result_at = _now
+            self._consec_rejects = 0
             self._solver_task = asyncio.create_task(self._solver_loop())
             self._metrics_task = asyncio.create_task(self._metrics_loop())
+            if self.cfg.heal_enabled:
+                self._heal_task = asyncio.create_task(self._heal_loop())
             # Reader runs until disconnect; await it for the session lifetime.
             await reader_task
         finally:
@@ -226,6 +245,13 @@ class StratumClient:
                 except (asyncio.CancelledError, Exception):
                     pass
                 self._metrics_task = None
+            if self._heal_task is not None:
+                self._heal_task.cancel()
+                try:
+                    await self._heal_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._heal_task = None
             if self._writer is not None:
                 try:
                     self._writer.close()
@@ -486,6 +512,9 @@ class StratumClient:
                     max_seconds=self.cfg.solver_max_seconds_per_slice,
                 )
                 self._inflight_parent = None
+                # v0.4.18 heal: any return (found or not) proves the solver is
+                # alive — clears the hang (trigger A) timer.
+                self._last_solver_result_at = time.monotonic()
                 # v0.4.3 — always submit found shares; let pool decide
                 # validity via its JobCache. Pre-v0.4.3 this was gated on
                 # current_job.job_id matching slice.job_id and dropped
@@ -589,19 +618,86 @@ class StratumClient:
         except Exception as e:
             log.warning("submit raised: %s", e)
             self.shares_rejected += 1
+            self._consec_rejects += 1  # v0.4.18 heal: count toward desync trigger
             return
         if ok:
             self.shares_accepted += 1
             if share.is_block:
                 self.blocks_found += 1
+            # v0.4.18 heal: an accept clears the desync streak + heal backoff.
+            self._consec_rejects = 0
+            self._last_accept_at = time.monotonic()
+            self._heals_without_accept = 0
             log.info("share OK job=%s nonce=%d (a/r/b=%d/%d/%d)",
                      job.job_id, share.nonce, self.shares_accepted,
                      self.shares_rejected, self.blocks_found)
         else:
             self.shares_rejected += 1
+            self._consec_rejects += 1  # v0.4.18 heal: count toward desync trigger
             log.info("share REJECTED job=%s nonce=%d (a/r=%d/%d)",
                      job.job_id, share.nonce, self.shares_accepted,
                      self.shares_rejected)
+
+    # ── v0.4.18 solver auto-heal watchdog ──────────────────────────────
+    async def _heal_loop(self) -> None:
+        """Bounce the solver daemon when it wedges (see config.heal_*).
+
+        Two work-proportional triggers, neither a naive wall-clock-since-accept
+        (which would punish slow GPUs / high vardiff / cold starts):
+          B (wrong-digest): >= heal_consec_rejects submitted-and-rejected
+            shares with zero accepts since the last accept. Self-resets on any
+            accept, so a healthy rig never accumulates.
+          A (hang): no solver result for heal_solver_stall_secs while the
+            process is alive (after a cold-start grace) — the home-1070 case,
+            where a/r/b freezes and B can never fire.
+
+        Recovery is cheap (~one daemon respawn) vs the wedge (100% loss), so we
+        bias toward bouncing. Cooldown escalates while heals don't yield an
+        accept, preventing a restart loop; it resets the instant one lands.
+        """
+        while True:
+            await asyncio.sleep(self.cfg.heal_check_interval_secs)
+            now = time.monotonic()
+            # Escalating cooldown: base × (1 + heals_without_accept), capped ×6.
+            cooldown = self.cfg.heal_cooldown_secs * (
+                1 + min(self._heals_without_accept, 5)
+            )
+            if now - self._last_heal_at < cooldown:
+                continue
+
+            reason: str | None = None
+            if self._consec_rejects >= self.cfg.heal_consec_rejects:
+                reason = (
+                    f"desync: {self._consec_rejects} consecutive rejects, "
+                    f"0 accepts (trigger B)"
+                )
+            elif (
+                now - self._last_solver_result_at > self.cfg.heal_solver_stall_secs
+                and now - self._session_started_at > self.cfg.heal_first_slice_grace_secs
+            ):
+                reason = (
+                    f"hang: no solver result for "
+                    f"{now - self._last_solver_result_at:.0f}s (trigger A)"
+                )
+            if reason is None:
+                continue
+
+            log.warning(
+                "AUTO-HEAL: bouncing solver daemon — %s "
+                "(a=%d r=%d heals_since_accept=%d)",
+                reason, self.shares_accepted, self.shares_rejected,
+                self._heals_without_accept,
+            )
+            try:
+                await self.solver.force_restart()
+            except Exception as e:
+                log.warning("auto-heal restart failed: %s", e)
+            self._last_heal_at = now
+            self._heals_without_accept += 1
+            # Clear the trigger state so we wait a full window before re-firing;
+            # the next genuine accept resets _heals_without_accept (and cooldown).
+            self._consec_rejects = 0
+            self._last_solver_result_at = now
 
     # ── Periodic metrics ───────────────────────────────────────────────
 

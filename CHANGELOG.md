@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.18] - 2026-06-16 (wrapper solver auto-heal; SOLVER BINARY UNCHANGED — additive to v0.4.17)
+
+### What
+- Wrapper-only release. The solver binary is **identical to v0.4.17** (`70f16afd` / `btx-prebuilds-v0.32.11-preempt`); the channel's per-platform solver URLs/SHAs/`min_required_sha256` are **untouched**. Only the wrapper version + pip tarball move (`__init__.py`, `pyproject.toml`, `.solver-channel.json` top-level `version`, `install.sh` pkg URL → `v0.4.18`).
+- New `stratum_client._heal_loop` watchdog + `GbtSolveWrapper.force_restart()`: bounces the long-running solver daemon when it wedges, on either trigger (both work-proportional, so ramp-ups / slow GPUs / high vardiff don't false-trip):
+  - **B (wrong-digest):** `≥ heal_consec_rejects` (default 8) consecutive submitted-and-rejected shares with zero accepts since the last accept. Resets on any accept.
+  - **A (hang):** no solver result for `heal_solver_stall_secs` (default 90 s) while the process is alive (the case where `a/r/b` freezes and B can never fire).
+- Escalating cooldown prevents restart loops; resets the instant an accept lands. Fresh window on every (re)connect. All thresholds in `config.heal_*`.
+
+### Why
+The long-running solver daemon can latch a bad runtime state around a pool restart's job discontinuity — emitting gross-wrong MatMul-V3 digests (100% code-23) or hanging — and a pool reconnect does **not** clear it (the daemon persists across stratum reconnects). Affected rigs mine **0 valid shares until the process restarts**, which no pool-side action (reconnect, socket kick) can do remotely. Diagnosed 2026-06-16: stuck vs healthy rigs ran the **same** wrapper + solver binary, version- and batch-independent; the jobs were provably valid (other miners accepted the same job_ids). A full miner restart revived a stuck rig where pool reconnects + a pool-side socket kick did not.
+
+### Validation
+- home-1070 (GTX 1070): after a pool restart the solver daemon wedged (a/r/b frozen at 111/0; pool rejects climbed 0→8, 0 accepts). Trigger B fired at 8 rejects, `force_restart` bounced the daemon (respawn ~6 s), first accept ~10 s later; single heal, no loop, rejects frozen at 8 thereafter. The wrapper self-healed the exact failure with no human intervention.
+- Healthy rig: watchdog armed, **0 false fires** over normal mining.
+
+### Rollout
+0.4.16+ wrappers self-upgrade to 0.4.18 via `wrapper_updater` (channel `version`) on their next re-check — no manual restart, no solver re-download (solver SHA unchanged). Fresh installs pull v0.4.18 via `install.sh`.
+
 ## [0.4.15] - 2026-06-14 (all NVIDIA + Spark platforms → btx-prebuilds-v0.32.11; MatMul-V3 GPU-scan fix)
 
 ### What

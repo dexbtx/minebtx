@@ -277,6 +277,21 @@ class GbtSolveWrapper:
         self._daemon = None
         self._matmul_params = None
 
+    async def force_restart(self) -> None:
+        """v0.4.18 auto-heal — bounce the solver daemon to clear a wedged
+        runtime state (gross-wrong V3 digests, or a hang). The next
+        `solve_slice` respawns a fresh daemon via `_ensure_daemon`.
+
+        Safe to call while a slice is in flight: `_shutdown_daemon` closes
+        stdin and SIGKILLs within ~5s if the daemon ignores it, which makes
+        any in-flight `readline` in `_send_job_with_retry` return — that path
+        then respawns or surfaces found=False, and the solver loop continues.
+        Deliberately does NOT take `_daemon_lock`: a hung daemon would hold a
+        slice (and thus block the lock) for up to the read timeout, and the
+        whole point is to interrupt exactly that."""
+        log.warning("auto-heal: force-restarting solver daemon")
+        await self._shutdown_daemon()
+
     def preempt(self) -> bool:
         """Abort the daemon's in-flight slice WITHOUT killing it (tip changed).
 
