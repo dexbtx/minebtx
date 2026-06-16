@@ -126,21 +126,33 @@ def _reexec_for_solver_update() -> None:
 
 
 async def _solver_update_watcher(cfg: MinerConfig) -> None:
-    """v0.4.16 (B): periodically re-check the solver channel so a long-running
-    miner picks up a force-published solver (new `min_required_sha256`) WITHOUT
-    a manual restart — the startup-only `maybe_update_solver` never re-fired
-    before. On an actual binary change we re-exec to load it. Fail-open: every
-    error is logged, never crashes mining. Opt out with DEXBTX_NO_SOLVER_RECHECK.
+    """v0.4.16 (B): periodically re-check the channel so a long-running miner
+    self-upgrades WITHOUT a manual restart — the startup-only updaters never
+    re-fired before.
+
+    v0.4.19: this loop now re-checks BOTH the wrapper version AND the solver
+    binary each cycle. Previously only the solver was re-checked; a wrapper-only
+    release (solver SHA unchanged) therefore never reached a running rig until a
+    manual restart — exposed by v0.4.18 (first solver-identical release).
+    `maybe_self_upgrade` is a no-op when current and pip-upgrades + re-execs on a
+    newer publish (does not return). Fail-open: every error is logged, never
+    crashes mining. Opt out with DEXBTX_NO_SOLVER_RECHECK (and/or
+    DEXBTX_NO_WRAPPER_AUTOUPDATE for just the wrapper half).
     """
     if os.environ.get("DEXBTX_NO_SOLVER_RECHECK"):
-        log.info("periodic solver re-check: disabled via env")
+        log.info("periodic re-check: disabled via env")
         return
     interval = max(300.0, float(cfg.solver_recheck_interval_secs))
     loop = asyncio.get_event_loop()
-    log.info("periodic solver re-check: every %.0f min", interval / 60.0)
+    log.info("periodic re-check (wrapper + solver): every %.0f min", interval / 60.0)
     while True:
         await asyncio.sleep(interval)
         try:
+            # v0.4.19: wrapper version first (mirrors startup order, so a wrapper
+            # upgrade ships any new solver-update logic too). No-op when current;
+            # re-execs on upgrade (never returns). Off the event loop: pip can
+            # take minutes and must not stall share submission.
+            await loop.run_in_executor(None, maybe_self_upgrade)
             before = hardware.solver_sha256_hex(cfg.gbt_solve_path)
             # maybe_update_solver does blocking network + file IO — keep it off
             # the event loop so share submission isn't stalled.

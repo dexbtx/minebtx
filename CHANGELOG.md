@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.19] - 2026-06-16 (periodic wrapper re-check; SOLVER BINARY UNCHANGED — additive)
+
+### What
+- The background re-check loop (`_solver_update_watcher`, v0.4.16) now re-checks the **wrapper version each cycle** (`maybe_self_upgrade`), not just the solver binary. No-op when current; pip-upgrade + re-exec on a newer publish. Version lockstep → `0.4.19` (`__init__.py`, `pyproject.toml`, `.solver-channel.json` `version`, `install.sh`); solver entries untouched.
+- Carries the v0.4.18 solver auto-heal unchanged.
+
+### Why
+v0.4.18 (the first solver-*identical*, wrapper-only release) exposed a gap: the v0.4.16 periodic re-check only re-checked the **solver** binary and re-exec'd on a SHA change. The wrapper self-upgrade (`maybe_self_upgrade`) ran **only at process startup** — on running rigs it propagated *only* by riding along on a solver re-exec. With an unchanged solver, no re-exec fired, so v0.4.18 could not reach a long-running rig without a manual restart. v0.4.19 makes wrapper-only updates self-propagate from here on.
+
+### Note
+This fixes propagation for releases **from v0.4.19 onward** — a rig must be on 0.4.19+ for the periodic wrapper check to run (chicken-and-egg). 0.4.17/0.4.18 rigs still pick up 0.4.19 on their next restart; thereafter wrapper-only updates need no restart.
+
 ## [0.4.18] - 2026-06-16 (wrapper solver auto-heal; SOLVER BINARY UNCHANGED — additive to v0.4.17)
 
 ### What
