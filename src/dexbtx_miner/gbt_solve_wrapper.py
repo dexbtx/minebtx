@@ -36,6 +36,7 @@ import dataclasses
 import json
 import logging
 import os
+import signal
 import time
 from pathlib import Path
 from typing import Any
@@ -246,6 +247,16 @@ class GbtSolveWrapper:
             log.warning("unexpected daemon ready line: %r", ready_text)
         else:
             log.info("solver daemon ready: %s", ready_text)
+        # Tip-preempt capability handshake (v0.4.17+): only solvers that
+        # advertise `"preempt": true` in their ready line honor SIGUSR1 as an
+        # in-flight abort. On an OLDER solver SIGUSR1 is fatal (kills the daemon),
+        # so preempt() is gated on this flag — safe on a half-upgraded fleet.
+        try:
+            self._solver_preempt_capable = bool(json.loads(ready_text).get("preempt", False))
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            self._solver_preempt_capable = False
+        if self._solver_preempt_capable:
+            log.info("solver supports tip-preempt (SIGUSR1 in-flight abort)")
         self._matmul_params = shape
         return self._daemon
 
@@ -265,6 +276,28 @@ class GbtSolveWrapper:
                 pass  # already exited between timeout and kill
         self._daemon = None
         self._matmul_params = None
+
+    def preempt(self) -> bool:
+        """Abort the daemon's in-flight slice WITHOUT killing it (tip changed).
+
+        Sends SIGUSR1; the patched solver's signal handler flips an abort flag
+        so the current solve returns within ~one scan window (~tens of ms),
+        keeping the CUDA context + high GPU clock warm so the next slice (new
+        tip) starts immediately. No-op on an unpatched solver (it would treat
+        SIGUSR1 as fatal, so only enable when running a preempt-capable binary).
+        Returns True if the signal was delivered. No-op (returns False) unless
+        the solver advertised tip-preempt capability in its daemon_ready line.
+        """
+        if not getattr(self, "_solver_preempt_capable", False):
+            return False
+        d = self._daemon
+        if d is not None and d.returncode is None:
+            try:
+                d.send_signal(signal.SIGUSR1)
+                return True
+            except (ProcessLookupError, ValueError):
+                pass
+        return False
 
     async def solve_slice(
         self,

@@ -43,28 +43,34 @@ class MinerConfig:
     solver_backend: str = "cuda"                # BTX_MATMUL_BACKEND (cuda|cpu|metal|mlx)
     gpu_inputs: int | None = 1                  # BTX_MATMUL_GPU_INPUTS (must be 1 post-block-125000 — GPU-gen inputs; saturation on all cards)
 
-    # Ceiling on nonces tried per solver invocation. In practice this is
-    # rarely the binding limit — `solver_max_seconds_per_slice` bounds
-    # each slice first on every modern GPU. Effectively a safety cap so a
-    # broken solver can't run away with a single multi-billion-nonce slice.
-    # NOTE: raising this to 4B was tested 2026-06-14 and BROKE share production
-    # (solver returned 0 immediately, ~5300 empty dispatches/sec) — do NOT raise
-    # blindly; the daemon/window-builder has a slice-size bug to find first.
-    nonces_per_slice: int = 20_000_000
+    # Ceiling on nonces tried per solver invocation. Deliberately set very high
+    # so it NEVER binds — `solver_max_seconds_per_slice` is the real limiter on
+    # every GPU class (a 5090 burns ~10^10 nonces in 30s; a 1070 ~2.4x10^9).
+    # Keeping max_seconds the binding limit is REQUIRED for GPU saturation: a
+    # solver call must run one long, continuous solve so the driver holds the
+    # high P-state. (The 2026-06-14 "raising to 4B → 0 shares / ~5300 empty
+    # dispatches/sec" incident was the v0.32.10 MatMul-V3 GPU-scan regression
+    # — the solver returned 0 because the GPU pre-hash scan was gated off. That
+    # is FIXED in v0.32.11; large slices are validated safe there, hours of clean
+    # ~1500 N/s on a 1070.) Still a safety cap so a broken solver can't loop a
+    # single multi-billion-nonce slice forever.
+    nonces_per_slice: int = 100_000_000_000
 
-    # How long a single solver slice runs before returning. Shorter slices
-    # mean LESS wasted work when a new block lands network-wide and the
-    # pool sends us a fresh job — the miner can re-check `_current_job`
-    # between slices and abandon stale work sooner.
+    # How long a single solver slice runs before returning. THIS is the binding
+    # limit and it drives GPU saturation: short slices (the old 5s default)
+    # finish before the driver ramps to the high P-state (~12s on a 1070), so the
+    # GPU is stuck in a low clock/power state at ~half throughput. A ~30s
+    # continuous solve holds P2 (SM ~1800MHz, ~120-150W on a 1070) for the whole
+    # slice → ~1.5-2x N/s. Validated on home-1070 (v0.32.11): P5/696MHz/~700 N/s
+    # at 5s → P2/~1800MHz/~1500 N/s at 30s.
     #
-    # At BTX's 90s target block time, a 5s slice caps the per-block waste
-    # at ~5.5% (vs ~17% with the old 30s default). With daemon mode the
-    # per-slice overhead is ~ms (CUDA context persists across slices), so
-    # shorter slices are essentially free.
-    #
-    # Don't go below ~2s: the kernel needs enough wall time to amortise
-    # the per-launch dispatch cost on slower cards (Pascal-class).
-    solver_max_seconds_per_slice: float = 5.0
+    # The per-block dead-tip cost of long slices (~17% at 30s if mining a stale
+    # parent until the slice ends) is collapsed to ~0 by the SIGUSR1 tip-preempt
+    # (see gbt_solve_wrapper.preempt / stratum_client._on_notify): a real parent
+    # change aborts the in-flight slice within ~ms. So long slices are now safe.
+    # Requires the preempt-capable solver (v0.4.17+); on an older solver the
+    # wrapper falls back to letting the slice finish (no SIGUSR1 sent).
+    solver_max_seconds_per_slice: float = 30.0
 
     # Reconnect with exponential backoff bounded by these.
     reconnect_initial_s: float = 1.0

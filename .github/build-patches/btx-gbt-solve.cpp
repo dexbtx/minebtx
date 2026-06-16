@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -35,6 +36,19 @@
 #include <vector>
 
 const TranslateFn G_TRANSLATION_FUN{nullptr};
+
+// Tip-change preempt (daemon mode): the wrapper sends SIGUSR1 when a new block
+// (real parent change) supersedes the in-flight slice. The handler flips this
+// flag; RunOneJob's watchdog bridges it into the per-job abort_flag so the
+// current SolveMatMul returns within one scan window (~tens of ms) WITHOUT
+// killing the daemon — the CUDA context + high GPU clock are preserved and the
+// next job (new tip) starts immediately. async-signal-safe: only an atomic store.
+std::atomic<bool> g_preempt{false};
+
+extern "C" void BtxPreemptSignalHandler(int /*signum*/)
+{
+    g_preempt.store(true, std::memory_order_relaxed);
+}
 
 namespace {
 
@@ -301,15 +315,29 @@ bool RunOneJob(Options& options, const Consensus::Params& consensus)
     std::atomic<bool> abort_flag{false};
     std::vector<uint32_t> matrix_c_data;
 
+    // Clear any preempt that arrived between jobs (e.g. a SIGUSR1 racing the
+    // stdin read) so it cannot abort THIS job before it starts. From here on a
+    // SIGUSR1 aborts the in-flight solve.
+    g_preempt.store(false, std::memory_order_relaxed);
+
+    // Watchdog bridges (a) the max_seconds deadline and (b) a tip-change
+    // preempt (SIGUSR1 -> g_preempt) into the per-job abort_flag. Run it in
+    // daemon mode even without a deadline so preempt still works.
     std::thread watchdog;
-    if (options.max_seconds > 0.0) {
+    const bool run_watchdog = options.max_seconds > 0.0 || options.daemon_mode;
+    if (run_watchdog) {
         watchdog = std::thread([&abort_flag, max_seconds = options.max_seconds]() {
+            const bool have_deadline = max_seconds > 0.0;
             const auto deadline = std::chrono::steady_clock::now() +
                 std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                    std::chrono::duration<double>(max_seconds));
-            while (std::chrono::steady_clock::now() < deadline) {
+                    std::chrono::duration<double>(have_deadline ? max_seconds : 0.0));
+            while (!have_deadline || std::chrono::steady_clock::now() < deadline) {
                 if (abort_flag.load(std::memory_order_relaxed)) return;
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                if (g_preempt.load(std::memory_order_relaxed)) {  // tip-change preempt
+                    abort_flag.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
             abort_flag.store(true, std::memory_order_relaxed);
         });
@@ -378,6 +406,7 @@ bool RunOneJob(Options& options, const Consensus::Params& consensus)
     abort_flag.store(true, std::memory_order_relaxed);
     if (watchdog.joinable()) watchdog.join();
 
+    const bool was_preempted = g_preempt.load(std::memory_order_relaxed);
     const size_t n_shares = shares.size();
     UniValue out(UniValue::VOBJ);
     out.pushKV("found", n_shares > 0);
@@ -386,6 +415,7 @@ bool RunOneJob(Options& options, const Consensus::Params& consensus)
     out.pushKV("tries_used", tries_used);
     out.pushKV("elapsed_s", elapsed_s);
     out.pushKV("nonce64_end", header.nNonce64);
+    out.pushKV("preempted", was_preempted);  // tip-change SIGUSR1 cut this slice short
     if (n_shares > 0) {
         // Backward-compat: surface the FIRST share at top level so existing
         // one-share wrappers keep working unchanged.
@@ -490,11 +520,16 @@ int main(int argc, char* argv[])
         return found ? 0 : 2;
     }
 
+    // Tip-change preempt: SIGUSR1 from the wrapper aborts the in-flight slice
+    // (see g_preempt). Default SIGUSR1 action terminates the process, so we must
+    // install a handler. Only in daemon mode (one-shot has no wrapper to signal).
+    std::signal(SIGUSR1, BtxPreemptSignalHandler);
+
     // Daemon mode: emit a ready marker on stderr (cheap handshake for the
     // wrapper), then read one JSON job per line on stdin. Each job updates
     // the per-job fields of `options` and runs RunOneJob, which emits one
     // JSON line per job on stdout. EOF on stdin terminates cleanly.
-    std::cerr << "{\"event\":\"daemon_ready\"}" << std::endl;
+    std::cerr << "{\"event\":\"daemon_ready\",\"preempt\":true}" << std::endl;
     std::string line;
     while (std::getline(std::cin, line)) {
         if (line.empty()) continue;

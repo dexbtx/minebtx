@@ -365,6 +365,20 @@ class StratumClient:
         self._current_job = job
         self._job_changed.set()
 
+        # Tip-change preempt: if the solver is mid-slice on a DIFFERENT parent
+        # block, abort that slice now (SIGUSR1) instead of letting it burn up to
+        # max_seconds on a dead tip (wasted hashrate + stale shares). Same-parent
+        # rotations (coinbase/mempool churn, clean=False) are NOT preempted — that
+        # work is still valid against the new merkle root.
+        inflight = getattr(self, "_inflight_parent", None)
+        if inflight is not None and inflight != job.previousblockhash:
+            try:
+                if self.solver.preempt():
+                    log.info("tip change %s -> %s: preempting in-flight slice",
+                             inflight[:16], job.previousblockhash[:16])
+            except Exception as e:
+                log.debug("preempt signal failed: %s", e)
+
     def _on_set_difficulty(self, params: list[Any]) -> None:
         try:
             self._difficulty = float(params[0])
@@ -460,6 +474,9 @@ class StratumClient:
 
             try:
                 challenge = job.to_solve_challenge()
+                # Record the parent this slice is solving so _on_notify can
+                # SIGUSR1-preempt it if a NEW block (different parent) arrives.
+                self._inflight_parent = job.previousblockhash
                 # Single-shot polling against upstream btx-gbt-solve.
                 # Returns one SolveResult per slice (found or not-found).
                 result = await self.solver.solve_slice(
@@ -468,12 +485,25 @@ class StratumClient:
                     max_tries=self.cfg.nonces_per_slice,
                     max_seconds=self.cfg.solver_max_seconds_per_slice,
                 )
+                self._inflight_parent = None
                 # v0.4.3 — always submit found shares; let pool decide
                 # validity via its JobCache. Pre-v0.4.3 this was gated on
                 # current_job.job_id matching slice.job_id and dropped
                 # every slice that intersected a notify (~all of them at
                 # 5s notify cadence + 5–15s slice duration).
-                if result.found:
+                # Stale-parent guard: if the tip moved to a DIFFERENT parent
+                # while this slice ran (e.g. a preempt fired but the slice had
+                # already found a share on the old parent), those shares are
+                # stale — the pool would reject them (wrong previousblockhash;
+                # JobCache only forgives same-parent rotations). Drop them.
+                _cur = self._current_job
+                _stale = _cur is not None and _cur.previousblockhash != job.previousblockhash
+                if result.found and _stale:
+                    log.info(
+                        "dropping stale share(s): slice parent %s != current %s (tip moved mid-slice)",
+                        job.previousblockhash[:16], _cur.previousblockhash[:16],
+                    )
+                if result.found and not _stale:
                     if self._current_job is None or self._current_job.job_id != job.job_id:
                         log.info(
                             "submitting found share for rotated job_id %s "
