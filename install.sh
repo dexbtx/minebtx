@@ -52,16 +52,16 @@ set -euo pipefail
 # ─── Configurables ──────────────────────────────────────────────────────────
 # Pin the prebuilds release tag. install.sh always pulls this version.
 # Bump in lockstep with experiments/vast/prebuilds and pyproject.toml.
-PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.11}"
-EXPECTED_SHA256="${EXPECTED_SHA256:-3fbc9d71350db2b686a91b5768405a19f81246346a94bf70a151dd0b762c12f3}"
+PREBUILDS_TAG="${PREBUILDS_TAG:-btx-prebuilds-v0.32.11-preempt}"
+EXPECTED_SHA256="${EXPECTED_SHA256:-70f16afdd0be23cbf94858196d9fa5d1c8fade46c1fbaa06dcc45ba60fa99a94}"
 # Darwin arm64 (Apple Silicon + Metal) solver pin. Fill in after the first green
 # build-solver-macos-arm64 CI run (the workflow prints the sha256). Until then,
 # macOS installs intentionally fail rather than install an unverified binary.
 DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-361abdad3880fe8be4ff470c29238c90303c6bd78dcac3b15643607fc369002c}"
 # Linux aarch64 (Grace / GB10 Blackwell etc.) CUDA solver pins. Default CUDA
 # toolkit variant is cuda12; set DEXBTX_CUDA=cuda13 for newer-driver hosts.
-AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-ca911dc06c79900a89afccee778b437fd353b0b78c57df231c3bc3007b590196}"
-AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-8337f2fd0335849b5aa3b9841f03c548596affe0be9f0260691dc14959e312e2}"
+AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-72f083c22704dcac683ac324bd2183ccb2c35a7fa60d847345c15757f3f0b625}"
+AARCH64_CUDA13_SHA256="${AARCH64_CUDA13_SHA256:-a8d3728b871cf200abbcbd3305e2b1282849e015f4b2b0cbaea31259d9858572}"
 # Linux x86_64 AMD/ROCm (HIP) solver pin — EXPERIMENTAL. Selected when an AMD
 # GPU is present (rocm-smi) or DEXBTX_GPU=rocm. Correctness is enforced by an
 # install-time HIP-vs-CPU self-check below (the HIP kernel is unproven off real
@@ -287,7 +287,7 @@ else
     # GitHub keeps the install pinned to a specific release commit and
     # avoids a third-party package surface. Override DEXBTX_MINER_PKG_URL
     # to install from a fork or a different ref.
-    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.16.tar.gz}"
+    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.17.tar.gz}"
     log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
     pip_install --upgrade "$DEXBTX_MINER_PKG_URL"
 

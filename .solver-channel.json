@@ -1,43 +1,43 @@
 {
   "_comment": "Canonical solver-binary manifest. Consumed by dexbtx_miner.solver_updater (binary) and dexbtx_miner.wrapper_updater (the top-level `version` field) on every miner startup. To add a new platform: add an entry under `platforms`. To force-upgrade across a fork boundary: set `min_required_sha256` on the relevant platform entry — a host whose binary != min that cannot download the new one will REFUSE to mine. v1 single-binary schema (top-level sha256+url) is still recognized by the updater as legacy (treated as x86_64-linux); the v2 platforms-dict schema below is preferred.",
-  "version": "0.4.16",
-  "released_at": "2026-06-15",
-  "notes": "v0.4.16 — wrapper adds a PERIODIC solver-channel re-check (default 30 min): a long-running miner now auto-upgrades a force-published solver (min_required bump) and re-execs to load it, without a manual restart. x86_64 solver is now STATICALLY linked (runs on CUDA 12 AND 13 hosts; fixes install failures on CUDA-13-only rigs). v0.4.15 — rebuilds all NVIDIA + Spark solvers from BTX v0.32.11 (tag 215170f, commit 601b2cc), the official fix for the v0.32.10 MatMul-V3 GPU pre-hash scan regression (the scan shipped half-wired at the fork, so GPU miners fell back to slow CPU per-nonce: util ~1-7%, hashrate cratered; shares stayed consensus-VALID — a throughput regression, not correctness). v0.32.11 restores the GPU scan under V3 (V3 seed builder added to the CUDA + Metal scan kernels, IsMatMulParentMtpSeedActive gates removed, SetDeterministicMatMulSeeds fails closed, + a CUDA CI parity lane that asserts the scan flags match CheckMatMulPreHashGate). Validated on home-1070 (GTX 1070 / sm_61): 99% util with the scan engaging, 54 shares / 0 rejects over 10 min. min_required_sha256 bumped to the v0.32.11 binaries so every host on the slow v0.32.10 build force-upgrades on next restart. x86_64 fat binary carries native cubins sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120 (GTX 10-series through RTX 50-series) + LTO, built on home-1070. arm64-darwin stays on v0.32.10 (Metal rebuild deferred; outside this release's NVIDIA+Spark scope).",
+  "version": "0.4.17",
+  "released_at": "2026-06-16",
+  "notes": "v0.4.17 — GPU SATURATION + tip-preempt. Headline: ~1.5-2x nonce throughput on most NVIDIA cards. Root cause: the miner fed the GPU in slices too short (5s) for the driver to ramp to its high P-state (~12s on a 1070), so the card idled between slices at ~half throughput. Fix is config-only on the wrapper side — nonces_per_slice 20M->100B and solver_max_seconds_per_slice 5s->30s — so each solver call is ONE long continuous solve that holds the high clock the whole time. Validated on home-1070 (GTX 1070 / sm_61): P5/696MHz/~700 N/s -> P2/~1800MHz/~120-150W/~1500 N/s, 0 rejects over hours. Tip-preempt makes the long slice safe: a real new-block tip change aborts the in-flight slice within ~ms via SIGUSR1 (the v0.4.17 solver advertises {preempt:true} in its daemon_ready line; the wrapper only sends SIGUSR1 to a preempt-capable solver, so a half-upgraded fleet is safe), instead of burning up to ~17% of a cycle on a dead tip; a stale-share guard drops any wrong-parent shares. SOLVER = btx v0.32.11 source + the dexbtx SIGUSR1 patch (consensus-IDENTICAL to v0.32.11, KAT-verified byte-for-byte), published as btx-prebuilds-v0.32.11-preempt. min_required_sha256 left at the v0.32.11 binaries: pre-v0.32.11 (broken/regression) solvers are still force-upgraded; v0.32.11 hosts pick up the preempt solver via NORMAL auto-update (not forced — no refuse-to-mine risk). x86_64 is one STATIC-cudart fat binary (CUDA 12 AND 13), native cubins sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120, LTO, built on home-1070. aarch64 cuda12 (sm_80;90;120) + cuda13 (sm_80;90;120;121) via build-solver-aarch64.yml. arm64-darwin Metal solver carried forward from v0.32.10 (gets the wrapper saturation config; no preempt — capability gate keeps it safe).",
   "platforms": {
     "x86_64-linux": {
-      "sha256": "3fbc9d71350db2b686a91b5768405a19f81246346a94bf70a151dd0b762c12f3",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11/btx-gbt-solve",
+      "sha256": "70f16afdd0be23cbf94858196d9fa5d1c8fade46c1fbaa06dcc45ba60fa99a94",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11-preempt/btx-gbt-solve",
       "min_required_sha256": "3fbc9d71350db2b686a91b5768405a19f81246346a94bf70a151dd0b762c12f3",
-      "force_upgrade_reason": "BTX v0.32.11 fixes the v0.32.10 MatMul-V3 GPU pre-hash scan regression. This build ALSO statically links the CUDA runtime (no libcudart.so.12 dependency) so it runs on CUDA-12 AND CUDA-13 hosts — earlier dynamic builds failed to load on CUDA-13-only rigs (driver 580+, RTX 50-series), aborting install. Pre-v0.32.10 solvers produce 100% invalid shares after the fork at mainnet block 130,500.",
-      "notes": "BTX v0.32.11 / matmul-v3. STATIC cudart (driver-only; runs on CUDA 12 and 13). CUDA 12.8 toolkit, native cubins sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120 (GTX 10-series through RTX 50-series). LTO. Built on home-1070; KAT-verified byte-identical (CPU+CUDA digest) to the prior dynamic 3f7bd3f7 build, which is itself bit-equivalent to btxd consensus."
+      "force_upgrade_reason": "Floor stays at the v0.32.11 build (first consensus-correct MatMul-V3 solver). Pre-v0.32.10 solvers produce 100% invalid shares after the fork at mainnet block 130,500; the v0.32.10 build fell back to slow CPU per-nonce. Hosts below this floor that cannot download the new binary refuse to mine. The v0.4.17 target (70f16afd) adds SIGUSR1 tip-preempt and is consensus-identical to v0.32.11; v0.32.11 hosts upgrade to it via normal auto-update (not forced).",
+      "notes": "btx v0.32.11 + dexbtx SIGUSR1 tip-preempt patch (daemon_ready advertises preempt:true). STATIC cudart (driver-only; runs on CUDA 12 and 13). CUDA 12.8 toolkit, native cubins sm_61;sm_75;sm_80;sm_86;sm_89;sm_90;sm_120 (GTX 10-series through RTX 50-series). LTO. Built on home-1070; KAT-verified byte-identical CPU digest to btxd consensus (ci-refvec)."
     },
     "aarch64-linux": {
-      "sha256": "ca911dc06c79900a89afccee778b437fd353b0b78c57df231c3bc3007b590196",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11/btx-gbt-solve-aarch64-linux-gnu-cuda12",
+      "sha256": "72f083c22704dcac683ac324bd2183ccb2c35a7fa60d847345c15757f3f0b625",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11-preempt/btx-gbt-solve-aarch64-linux-gnu-cuda12",
       "min_required_sha256": "ca911dc06c79900a89afccee778b437fd353b0b78c57df231c3bc3007b590196",
-      "force_upgrade_reason": "BTX v0.32.11 fixes the v0.32.10 MatMul-V3 GPU pre-hash scan regression (GPU fell to slow CPU per-nonce). Hosts on the v0.32.10 binary force-upgrade. Pre-v0.32.10 solvers also produce 100% invalid shares after the fork at mainnet block 130,500.",
-      "notes": "BTX v0.32.11 / matmul-v3. CUDA 12.8, archs sm_80;sm_90;sm_120 (Ampere through Blackwell consumer). Default ARM entry. CUDA-13-only hosts (GB10/Spark, sm_121) should set DEXBTX_PLATFORM_KEY=aarch64-linux-cuda13. Built via build-solver-aarch64.yml."
+      "force_upgrade_reason": "Floor at the v0.32.11 build (first consensus-correct MatMul-V3 solver). Pre-v0.32.10 solvers produce 100% invalid shares after the fork; the v0.32.10 build fell to slow CPU per-nonce. The v0.4.17 target adds SIGUSR1 tip-preempt, consensus-identical to v0.32.11; v0.32.11 hosts upgrade via normal auto-update.",
+      "notes": "btx v0.32.11 + SIGUSR1 tip-preempt. CUDA 12.8, archs sm_80;sm_90;sm_120 (Ampere through Blackwell consumer). Default ARM entry. CUDA-13-only hosts (GB10/Spark, sm_121) should set DEXBTX_PLATFORM_KEY=aarch64-linux-cuda13. Built via build-solver-aarch64.yml."
     },
     "aarch64-linux-cuda12": {
-      "sha256": "ca911dc06c79900a89afccee778b437fd353b0b78c57df231c3bc3007b590196",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11/btx-gbt-solve-aarch64-linux-gnu-cuda12",
+      "sha256": "72f083c22704dcac683ac324bd2183ccb2c35a7fa60d847345c15757f3f0b625",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11-preempt/btx-gbt-solve-aarch64-linux-gnu-cuda12",
       "min_required_sha256": "ca911dc06c79900a89afccee778b437fd353b0b78c57df231c3bc3007b590196",
-      "force_upgrade_reason": "BTX v0.32.11 fixes the v0.32.10 MatMul-V3 GPU pre-hash scan regression (GPU fell to slow CPU per-nonce). Hosts on the v0.32.10 binary force-upgrade. Pre-v0.32.10 solvers also produce 100% invalid shares after the fork at mainnet block 130,500.",
-      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. BTX v0.32.11 / matmul-v3. CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 — use cuda13 build for GB10/Spark). Built via build-solver-aarch64.yml."
+      "force_upgrade_reason": "Floor at the v0.32.11 build. The v0.4.17 target adds SIGUSR1 tip-preempt, consensus-identical to v0.32.11; v0.32.11 hosts upgrade via normal auto-update.",
+      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda12. btx v0.32.11 + SIGUSR1 tip-preempt. CUDA 12.8 build, archs sm_80;sm_90;sm_120 (no sm_121 — use cuda13 build for GB10/Spark). Built via build-solver-aarch64.yml."
     },
     "aarch64-linux-cuda13": {
-      "sha256": "8337f2fd0335849b5aa3b9841f03c548596affe0be9f0260691dc14959e312e2",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11/btx-gbt-solve-aarch64-linux-gnu-cuda13",
+      "sha256": "a8d3728b871cf200abbcbd3305e2b1282849e015f4b2b0cbaea31259d9858572",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11-preempt/btx-gbt-solve-aarch64-linux-gnu-cuda13",
       "min_required_sha256": "8337f2fd0335849b5aa3b9841f03c548596affe0be9f0260691dc14959e312e2",
-      "force_upgrade_reason": "BTX v0.32.11 fixes the v0.32.10 MatMul-V3 GPU pre-hash scan regression (GPU fell to slow CPU per-nonce). Hosts on the v0.32.10 binary force-upgrade. Pre-v0.32.10 solvers also produce 100% invalid shares after the fork at mainnet block 130,500.",
-      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda13. BTX v0.32.11 / matmul-v3. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer needing a CUDA-13 runtime. Built via build-solver-aarch64.yml."
+      "force_upgrade_reason": "Floor at the v0.32.11 build. The v0.4.17 target adds SIGUSR1 tip-preempt, consensus-identical to v0.32.11; v0.32.11 hosts upgrade via normal auto-update.",
+      "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda13. btx v0.32.11 + SIGUSR1 tip-preempt. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer needing a CUDA-13 runtime. Built via build-solver-aarch64.yml."
     },
     "arm64-darwin": {
       "sha256": "361abdad3880fe8be4ff470c29238c90303c6bd78dcac3b15643607fc369002c",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.10/btx-gbt-solve-darwin-arm64",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11-preempt/btx-gbt-solve-darwin-arm64",
       "min_required_sha256": "361abdad3880fe8be4ff470c29238c90303c6bd78dcac3b15643607fc369002c",
       "force_upgrade_reason": "MatMul-V3 fork at mainnet block 130,500 — pre-v0.32.10 solvers produce 100% invalid shares after the fork.",
-      "notes": "Apple Silicon Metal backend, rebuilt from BTX v0.32.10 source. CI verifies cpu_digest == metal_digest == reference_digest before publish."
+      "notes": "Apple Silicon Metal backend, carried forward unchanged from BTX v0.32.10 (no SIGUSR1 preempt; the v0.4.17 wrapper's capability gate keeps it safe — it gets the saturation config but never receives a preempt signal). Re-hosted under the v0.32.11-preempt tag so install.sh's single PREBUILDS_TAG resolves for every platform. CI verified cpu_digest == metal_digest == reference_digest before original publish."
     }
   }
 }
