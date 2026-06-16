@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.19-darwin-hotfix] - 2026-06-16 (arm64-darwin solver only; manifest hotfix — NO wrapper change)
+
+### What
+- `.solver-channel.json` `arm64-darwin` entry: `sha256` → `ee83d3fc846c7ecefdd3490a8f30b3f1294e274299d1b534b4c6245f709a40ba`, url unchanged (re-hosted at `btx-prebuilds-v0.32.11-preempt/btx-gbt-solve-darwin-arm64`, clobbered). The asset is now a **real btx v0.32.11 source build** (e1e5673 + `05-cmakelists-add-gbt-solve-target.patch` + the v0.4.17 `btx-gbt-solve.cpp` preempt main), replacing the v0.32.10-carried binary.
+- Top-level `version` **unchanged at 0.4.19**, all other platform entries unchanged, `solver_updater.py`/`wrapper_updater.py` unchanged. This is a solver-binary hotfix delivered purely through the per-platform `sha256`; the wrapper does not move (no pip churn).
+- Phase 1: `min_required_sha256` left at `361abdad` (soft — download failure falls back to the old valid binary, never refuse-to-mine). Phase 2 (after fleet uptake): raise `min_required_sha256` → `ee83d3fc`.
+
+### Why
+The shipped `arm64-darwin` solver was the v0.32.10-carried binary, whose MatMul-V3 GPU pre-hash scan is half-wired → CPU per-nonce fallback at/after mainnet block 130,500. Measured on Apple M4: shipped binary **0.15M nonce-scan/s** vs a v0.32.11-source build **5.0M nonce-scan/s** → **~33×**. Every fleet Mac on the auto-updater was mining at ~1/33 of capable hashrate. (Live confirmation: pool dashboard — eBTX Macs ~80 nps; our M4 on the source build was top Mac on the board.) The v0.32.11 *source* has the V3 scan wired; the Metal inline-source metallib fallback carries the scan kernel, so it engages regardless of metallib packaging.
+
+### Validation
+- KAT: `cpu_digest == metal_digest == reference` on the post-125000 V2 vector (`ci-refvec.json`, h130000).
+- V3 bit-exact: 64/64 distinct nonces `cpu == metal` at h131000 + parent_mtp.
+- Live soak: APPLEM4-GOLF-1 on minebtx.com, 52 min, **345+ accepted / 0 rejected / 0 code-23**, difficulty converged 131072, GPU scan engaged the whole time.
+
+### CI gap (follow-up)
+`build-solver-macos-arm64.yml` previously gated only on the digest KAT — it never exercised scan throughput, so a CPU-fallback binary passed green (how the v0.32.10-carried asset shipped). A scan-rate assertion (`> 1M nonce/s` at a hard target) is staged for the macOS lane and will land separately (needs a token with `workflow` scope).
+
 ## [0.4.19] - 2026-06-16 (periodic wrapper re-check; SOLVER BINARY UNCHANGED — additive)
 
 ### What
