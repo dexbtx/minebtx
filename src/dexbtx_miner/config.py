@@ -23,6 +23,17 @@ class MinerConfig:
     payout_address: str = ""
     worker_name: str = "default"
 
+    # Payout splits (optional). Redirect a cut of THIS rig's earnings to other
+    # addresses; the remainder stays with payout_address. Each entry is a fee
+    # leg: {"address": "btx1z...", "pct": 10}. Sent one-shot in mining.subscribe;
+    # the pool honors it ONLY for this session's own credits — you can only split
+    # your own earnings. Sum of pct must be <= 20 (pool-side cap) or it's ignored.
+    # Example (operator running a friend's rig, taking a 10% cut — point
+    # payout_address at the friend, declare your 10% here):
+    #   payout_splits:
+    #     - { address: "btx1z<operator>", pct: 10 }
+    payout_splits: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+
     # Path to the upstream BTX solver binary. The install.sh writes this
     # to ~/.dexbtx-miner/bin/btx-gbt-solve on Linux/macOS. Override via
     # config.yaml or the `BTX_GBT_SOLVE` env var if you have a custom build.
