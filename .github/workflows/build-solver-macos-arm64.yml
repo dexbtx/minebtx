@@ -71,7 +71,7 @@ jobs:
           set -euo pipefail
           PATCH_DIR="$GITHUB_WORKSPACE/.github/build-patches"
           ls -la "$PATCH_DIR"
-          for p in 05-cmakelists-add-gbt-solve-target.patch; do
+          for p in 05-cmakelists-add-gbt-solve-target.patch 12-darwin-metal-opt135-embedded-sync.patch; do
             echo "=== applying $p ==="
             patch -p1 < "$PATCH_DIR/$p"
           done
@@ -180,6 +180,45 @@ jobs:
             exit 1
           fi
           echo "PASS: GPU pre-hash scan engaged (${RATE} nonce/s)."
+
+      - name: Gate — embedded KERNEL_SOURCE is current (deny metallib = the fleet path)
+        working-directory: btx-src/build
+        run: |
+          set -euo pipefail
+          # The fleet ships no metallib asset, so every fleet Mac falls through to
+          # the embedded KERNEL_SOURCE. The digest check above runs the *metallib*
+          # (build dir present) — it does NOT exercise the embedded string. And
+          # because the opts are byte-exact, a STALE embedded string would still
+          # pass a digest check, just slower. So gate the embedded path on BOTH
+          # byte-exactness AND optimized throughput.
+          REF="$GITHUB_WORKSPACE/.github/build-patches/ci-refvec.json"
+          EXP="$(python3 -c "import json;print(json.load(open('$REF'))['expected']['matmul_digest'])")"
+          VEC="$(python3 -c "import json;print(json.dumps(json.load(open('$REF'))['job']))")"
+          EMB_D="$(echo "$VEC" | BTX_MATMUL_METALLIB_PATH=/nope BTX_ORACLE_METALLIB_PATH=/nope \
+            "$BIN" --daemon --backend metal --solver-threads 1 2>/dev/null \
+            | python3 -c "import sys,json;print(json.load(sys.stdin).get('matmul_digest','NONE'))")"
+          echo "embedded-path digest: $EMB_D (expect $EXP)"
+          [ "$EMB_D" = "$EXP" ] || { echo "FAIL: embedded KERNEL_SOURCE digest mismatch — embedded string STALE vs .metal"; exit 1; }
+          JOB="$(python3 -c '
+          import json,sys
+          j=json.load(open(sys.argv[1]))["job"]
+          j.update(bits="1d00ffff", block_height=131000, parent_mtp=1700000000, nonce_start=1, max_tries=100000000000, max_seconds=6)
+          j.pop("share_target", None)
+          print(json.dumps(j))' "$REF")"
+          rate() { printf '%s\n' "$JOB" | env "$@" "$BIN" --daemon --backend metal --solver-threads 1 2>/dev/null | python3 -c '
+          import sys,json
+          for line in sys.stdin:
+              try: d=json.loads(line)
+              except Exception: continue
+              if "tries_used" in d and d.get("elapsed_s",0)>0:
+                  print(int(d["tries_used"]/d["elapsed_s"])); break'; }
+          R_LIB="$(rate)"
+          R_EMB="$(rate BTX_MATMUL_METALLIB_PATH=/nope BTX_ORACLE_METALLIB_PATH=/nope)"
+          echo "metallib rate: ${R_LIB:-0} | embedded rate: ${R_EMB:-0} nonce/s"
+          [ "${R_EMB:-0}" -gt 1000000 ] || { echo "FAIL: embedded rate <=1M (CPU fallback / broken embedded path)"; exit 1; }
+          python3 -c "import sys; lib=${R_LIB:-0}; emb=${R_EMB:-0}; sys.exit(0 if lib>0 and emb>=0.9*lib else 1)" \
+            || { echo "FAIL: embedded rate <90% of metallib — embedded string is STALE (un-synced optimizations)"; exit 1; }
+          echo "PASS: embedded path byte-exact + at optimized rate. Fleet-runtime path verified current."
 
       - name: Stage binary for upload
         run: |

@@ -1,0 +1,924 @@
+diff --git a/src/metal/matmul_accel.mm b/src/metal/matmul_accel.mm
+index 90737df..4060959 100644
+--- a/src/metal/matmul_accel.mm
++++ b/src/metal/matmul_accel.mm
+@@ -452,6 +452,102 @@ kernel void generate_base_matrix_from_seed(
+     output[gid] = oracle_from_seed(seed_internal, gid);
+ }
+ 
++// Oracle base-gen with a shared seed midstate. The 36-byte message (seed[32]+index[4]) is a
++// single SHA block; the seed (w[0..7]) is identical for every element, so rounds 0-7 yield a
++// constant post-round-7 state — computed once per threadgroup, then only rounds 8-63 run per
++// element. Byte-identical to generate_base_matrix_from_seed. Rare rejection falls back to the
++// reference oracle_from_seed (preserves the >= MODULUS retry path exactly).
++kernel void generate_base_matrix_from_seed_mid(
++    constant KernelParams& p [[buffer(0)]],
++    constant uchar* seed_internal [[buffer(1)]],
++    device uint* output [[buffer(2)]],
++    uint gid [[thread_position_in_grid]],
++    uint tid [[thread_index_in_threadgroup]])
++{
++    threadgroup uint sh_seed_w[8];
++    threadgroup uint sh_mid[8];
++    threadgroup uint sh_pre[9];
++    if (tid == 0u) {
++        thread uint w[16];
++        for (uint i = 0; i < 16; ++i) { w[i] = 0u; }
++        for (uint i = 0; i < 32; ++i) { set_oracle_byte(w, i, seed_internal[31u - i]); }
++        uint a = 0x6a09e667u, b = 0xbb67ae85u, c = 0x3c6ef372u, d = 0xa54ff53au,
++             e = 0x510e527fu, f = 0x9b05688cu, g = 0x1f83d9abu, h = 0x5be0cd19u;
++        for (uint t = 0; t < 8; ++t) {
++            const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t];
++            const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++            h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++        }
++        sh_mid[0]=a; sh_mid[1]=b; sh_mid[2]=c; sh_mid[3]=d;
++        sh_mid[4]=e; sh_mid[5]=f; sh_mid[6]=g; sh_mid[7]=h;
++        for (uint i = 0; i < 8; ++i) { sh_seed_w[i] = w[i]; }
++        // schedule terms w16..w22 depend only on the seed (first variable term is w23 via
++        // ssig0(w8)); precompute once, plus the constant partials of w23/w24.
++        {
++            const uint c9 = 0x80000000u, c15 = 36u * 8u; // w9, w15 constants; w10..w14 = 0
++            uint s16 = sha_ssig1(0u) + c9 + sha_ssig0(w[1]) + w[0];
++            uint s17 = sha_ssig1(c15) + 0u + sha_ssig0(w[2]) + w[1];
++            uint s18 = sha_ssig1(s16) + 0u + sha_ssig0(w[3]) + w[2];
++            uint s19 = sha_ssig1(s17) + 0u + sha_ssig0(w[4]) + w[3];
++            uint s20 = sha_ssig1(s18) + 0u + sha_ssig0(w[5]) + w[4];
++            uint s21 = sha_ssig1(s19) + 0u + sha_ssig0(w[6]) + w[5];
++            uint s22 = sha_ssig1(s20) + c15 + sha_ssig0(w[7]) + w[6];
++            sh_pre[0]=s16; sh_pre[1]=s17; sh_pre[2]=s18; sh_pre[3]=s19;
++            sh_pre[4]=s20; sh_pre[5]=s21; sh_pre[6]=s22;
++            sh_pre[7] = sha_ssig1(s21) + s16 + w[7];            // pc23: + ssig0(w8) per thread
++            sh_pre[8] = sha_ssig1(s22) + s17 + sha_ssig0(c9);   // pc24: + w8 per thread
++        }
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    const uint nn = p.n * p.n;
++    if (gid >= nn) { return; }
++    const uint index = gid;
++
++    // Rolling 16-word schedule (PR58 windowed-SHA): 16 live schedule words instead of 64 —
++    // big register-pressure / occupancy win on the hot oracle-gen kernel. Same math, byte-exact.
++    thread uint w[16];
++    for (uint i = 0; i < 8; ++i) { w[i] = sh_seed_w[i]; }
++    w[8] = ((index & 0xffu) << 24u) | (((index >> 8u) & 0xffu) << 16u)
++         | (((index >> 16u) & 0xffu) << 8u) | ((index >> 24u) & 0xffu);
++    w[9] = 0x80000000u;
++    w[10] = 0u; w[11] = 0u; w[12] = 0u; w[13] = 0u; w[14] = 0u;
++    w[15] = 36u * 8u;
++    uint a = sh_mid[0], b = sh_mid[1], c = sh_mid[2], d = sh_mid[3],
++         e = sh_mid[4], f = sh_mid[5], g = sh_mid[6], h = sh_mid[7];
++    // Full unroll so every w[t & 15] index is a compile-time constant — keeps the 16-word
++    // window in registers. (A dynamic-indexed loop spills the array and runs 2x slower.)
++#pragma clang loop unroll(full)
++    for (uint t = 8; t < 16; ++t) {
++        const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t & 15u];
++        const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++    }
++#pragma clang loop unroll(full)
++    for (uint t = 16; t < 23; ++t) {
++        w[t & 15u] = sh_pre[t - 16u];
++        const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t & 15u];
++        const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++    }
++#pragma clang loop unroll(full)
++    for (uint t = 23; t < 25; ++t) {
++        w[t & 15u] = (t == 23u) ? (sh_pre[7] + sha_ssig0(w[8])) : (sh_pre[8] + w[8]);
++        const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t & 15u];
++        const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++    }
++#pragma clang loop unroll(full)
++    for (uint t = 25; t < 64; ++t) {
++        w[t & 15u] = sha_ssig1(w[(t - 2u) & 15u]) + w[(t - 7u) & 15u]
++                   + sha_ssig0(w[(t - 15u) & 15u]) + w[(t - 16u) & 15u];
++        const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t & 15u];
++        const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++    }
++    const uint candidate = oracle_bswap32(0x6a09e667u + a) & MODULUS;
++    output[gid] = (candidate < MODULUS) ? candidate : oracle_from_seed(seed_internal, index);
++}
++
+ kernel void build_perturbed(
+     constant KernelParams& p [[buffer(0)]],
+     device const uint* matrix_a [[buffer(1)]],
+@@ -547,19 +643,25 @@ kernel void fused_final_compress(
+ 
+     threadgroup uint weighted_terms[MAX_BLOCK_ELEMENTS];
+     const uint weight = compress_vec[tid];
+-    uint c_acc = 0;
++    // Deferred M31 reduction: a,b are M31-reduced (< MODULUS), so each product a*b < 2^62 and FOUR
++    // fit in a 64-bit word (4*(2^31-2)^2 < 2^64). Accumulate 4 raw products per reduce64 instead of
++    // one per term (dot_step) — ~4x fewer reductions, the matmul's dominant op. The reduced partials
++    // (< MODULUS) sum into a 64-bit accumulator (< 2^44 total) and are reduced once at the end.
++    // Byte-exact: M31 addition is associative, so grouping the sum is identical to per-term add_mod.
++    ulong acc64 = 0;
++    ulong raw = 0;
++    uint grp = 0u;
+     for (uint ell = 0; ell < p.N; ++ell) {
+         const uint k_base = ell * p.b;
+-
+-        uint product = 0;
+         for (uint k = 0; k < p.b; ++k) {
+             const uint a = a_prime[row * p.n + (k_base + k)];
+             const uint b = b_prime[(k_base + k) * p.n + col];
+-            product = dot_step(product, a, b);
++            raw += (ulong)a * (ulong)b;
++            if ((++grp & 3u) == 0u) { acc64 += (ulong)reduce64(raw); raw = 0u; }
+         }
+-
+-        c_acc = add_mod(c_acc, product);
+     }
++    acc64 += (ulong)reduce64(raw);
++    const uint c_acc = reduce64(acc64);
+ 
+     weighted_terms[tid] = mul_mod(c_acc, weight);
+     const uint reduced = reduce_threadgroup_add_mod(weighted_terms, tid, block_elements);
+@@ -718,20 +820,34 @@ kernel void fused_final_compress_specialized(
+     const uint col = tile_j * b + bc;
+ 
+     threadgroup uint weighted_terms[MAX_BLOCK_ELEMENTS];
++    threadgroup uint tileA[2u * MAX_BLOCK_ELEMENTS];   // A' b×2b tile (2 k-blocks staged per barrier)
++    threadgroup uint tileB[2u * MAX_BLOCK_ELEMENTS];   // B' 2b×b tile
+     const uint weight = compress_vec[tid];
+-    uint c_acc = 0;
+-    for (uint ell = 0; ell < FC_SPEC_NBLOCKS; ++ell) {
+-        const uint k_base = ell * b;
+-
+-        uint product = 0;
+-        for (uint k = 0; k < FC_SPEC_B; ++k) {
+-            const uint a = a_prime[row * n + (k_base + k)];
+-            const uint b_val = b_prime[(k_base + k) * n + col];
+-            product = dot_step(product, a, b_val);
++    // Threadgroup-tiled matmul + deferred M31 reduction: each b×b threadgroup cooperatively stages TWO
++    // k-blocks of A' and B' into threadgroup memory per barrier (cuts redundant global reads ~b×), then
++    // accumulates 4 raw products per reduce64. Same k-order + reduction => byte-identical to the untiled
++    // path. (FC_SPEC_NBLOCKS is even for all shipped shapes: 512/16, 256/8, 64/4.)
++    ulong acc64 = 0;
++    ulong raw = 0;
++    uint grp = 0u;
++    const uint twob = 2u * FC_SPEC_B;
++    for (uint ell = 0; ell < FC_SPEC_NBLOCKS; ell += 2u) {
++        const uint kb = ell * b;
++        tileA[br * twob + bc]       = a_prime[row * n + (kb + bc)];
++        tileA[br * twob + b + bc]   = a_prime[row * n + (kb + b + bc)];
++        tileB[br * b + bc]          = b_prime[(kb + br) * n + col];
++        tileB[(b + br) * b + bc]    = b_prime[(kb + b + br) * n + col];
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++        for (uint k = 0; k < twob; ++k) {
++            const uint a = tileA[br * twob + k];
++            const uint b_val = tileB[k * b + bc];
++            raw += (ulong)a * (ulong)b_val;
++            if ((++grp & 3u) == 0u) { acc64 += (ulong)reduce64(raw); raw = 0u; }
+         }
+-
+-        c_acc = add_mod(c_acc, product);
++        threadgroup_barrier(mem_flags::mem_threadgroup);
+     }
++    acc64 += (ulong)reduce64(raw);
++    const uint c_acc = reduce64(acc64);
+ 
+     weighted_terms[tid] = mul_mod(c_acc, weight);
+     const uint reduced = reduce_threadgroup_add_mod(weighted_terms, tid, block_elements);
+@@ -840,56 +956,6 @@ kernel void fused_prefix_compress_specialized(
+     }
+ }
+ 
+-inline uint block_dot_product_manual(constant KernelParams& p,
+-                                     device const uint* a_prime,
+-                                     device const uint* b_prime,
+-                                     threadgroup uint tile_a[16][16],
+-                                     threadgroup uint tile_b[16][16],
+-                                     uint row,
+-                                     uint col,
+-                                     uint ell,
+-                                     uint2 tid)
+-{
+-    const uint k_base = ell * p.b;
+-
+-    uint a_value = 0;
+-    uint b_value = 0;
+-    if (tid.x < p.b && tid.y < p.b) {
+-        a_value = a_prime[row * p.n + (k_base + tid.x)];
+-        b_value = b_prime[(k_base + tid.y) * p.n + col];
+-    }
+-    tile_a[tid.y][tid.x] = a_value;
+-    tile_b[tid.y][tid.x] = b_value;
+-    threadgroup_barrier(mem_flags::mem_threadgroup);
+-
+-    uint product = 0;
+-    for (uint k = 0; k < p.b; ++k) {
+-        const uint a = tile_a[tid.y][k];
+-        const uint b = tile_b[k][tid.x];
+-        product = dot_step(product, a, b);
+-    }
+-    threadgroup_barrier(mem_flags::mem_threadgroup);
+-    return product;
+-}
+-
+-inline uint block_dot_product_prepared(constant KernelParams& p,
+-                                       device const uint* a_prime,
+-                                       device const uint* b_prime,
+-                                       threadgroup uint tile_a[16][16],
+-                                       threadgroup uint tile_b[16][16],
+-                                       uint row,
+-                                       uint col,
+-                                       uint ell,
+-                                       uint2 tid)
+-{
+-#if defined(__METAL_VERSION__) && (__METAL_VERSION__ >= 400) && defined(BTX_ENABLE_COOPERATIVE_TENSOR_INT_EXPERIMENT)
+-    // Cooperative integer tensors are not yet enabled for this path.
+-    return block_dot_product_manual(p, a_prime, b_prime, tile_a, tile_b, row, col, ell, tid);
+-#else
+-    return block_dot_product_manual(p, a_prime, b_prime, tile_a, tile_b, row, col, ell, tid);
+-#endif
+-}
+-
+ kernel void build_prefix_tiled(
+     constant KernelParams& p [[buffer(0)]],
+     device const uint* a_prime [[buffer(1)]],
+@@ -909,10 +975,28 @@ kernel void build_prefix_tiled(
+ 
+     uint c_acc = 0;
+     for (uint ell = 0; ell < p.N; ++ell) {
+-        const uint product = block_dot_product_prepared(p, a_prime, b_prime, tile_a, tile_b, row, col, ell, tid);
++        const uint k_base = ell * p.b;
++
++        uint a_value = 0;
++        uint b_value = 0;
++        if (tid.x < p.b && tid.y < p.b) {
++            a_value = a_prime[row * p.n + (k_base + tid.x)];
++            b_value = b_prime[(k_base + tid.y) * p.n + col];
++        }
++        tile_a[tid.y][tid.x] = a_value;
++        tile_b[tid.y][tid.x] = b_value;
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++
++        uint product = 0;
++        for (uint k = 0; k < p.b; ++k) {
++            const uint a = tile_a[tid.y][k];
++            const uint b = tile_b[k][tid.x];
++            product = dot_step(product, a, b);
++        }
+ 
+         c_acc = add_mod(c_acc, product);
+         c_prefix[ell * (p.n * p.n) + row * p.n + col] = c_acc;
++        threadgroup_barrier(mem_flags::mem_threadgroup);
+     }
+ }
+ 
+@@ -1016,7 +1100,6 @@ kernel void product_compressed_sha256(
+         hash_output[i * 4 + 3] = (uchar)(word & 0xffu);
+     }
+ }
+-
+ )METAL";
+ 
+ void AppendUniquePath(std::vector<std::string>& paths, const char* path)
+@@ -1346,6 +1429,7 @@ struct MetalContext {
+     std::string error;
+     id<MTLDevice> device{nil};
+     id<MTLComputePipelineState> generate_base_matrix_pipeline{nil};
++    id<MTLComputePipelineState> generate_base_matrix_mid_pipeline{nil};
+     id<MTLComputePipelineState> build_perturbed_pipeline{nil};
+     id<MTLComputePipelineState> build_prefix_pipeline{nil};
+     id<MTLComputePipelineState> fused_final_compress_pipeline{nil};
+@@ -1446,6 +1530,14 @@ struct MetalContext {
+                 return;
+             }
+ 
++            // PR58 seed-midstate A/B gen: byte-exact, faster (shared per-threadgroup seed midstate).
++            // Non-fatal — if the function/pipeline doesn't load, the reference pipeline is used.
++            id<MTLFunction> generate_base_mid_function = [library newFunctionWithName:@"generate_base_matrix_from_seed_mid"];
++            if (generate_base_mid_function != nil) {
++                NSError* mid_error = nil;
++                generate_base_matrix_mid_pipeline = [device newComputePipelineStateWithFunction:generate_base_mid_function error:&mid_error];
++            }
++
+             id<MTLFunction> build_perturbed_function = [library newFunctionWithName:@"build_perturbed"];
+             if (build_perturbed_function == nil) {
+                 error = "Failed to load Metal kernel function: build_perturbed";
+@@ -3996,11 +4088,16 @@ MatMulDigestBatchResult ComputeCanonicalTranscriptDigestVariableBaseBatch(
+                 encode_error = "Failed to create Metal variable-base matrix generation encoder";
+                 return false;
+             }
+-            [encoder setComputePipelineState:context.generate_base_matrix_pipeline];
++            id<MTLComputePipelineState> genbase_pipeline =
++                (context.generate_base_matrix_mid_pipeline != nil &&
++                 std::getenv("BTX_MATMUL_NO_MIDSTATE_GENBASE") == nullptr)
++                    ? context.generate_base_matrix_mid_pipeline
++                    : context.generate_base_matrix_pipeline;
++            [encoder setComputePipelineState:genbase_pipeline];
+             [encoder setBuffer:params_buffer offset:0 atIndex:0];
+             [encoder setBuffer:seed_stage_buffer offset:static_cast<NSUInteger>(seed_offset) atIndex:1];
+             [encoder setBuffer:output_buffer offset:static_cast<NSUInteger>(output_offset) atIndex:2];
+-            const NSUInteger group_size = SelectThreadGroupSize(context.generate_base_matrix_pipeline, 256);
++            const NSUInteger group_size = SelectThreadGroupSize(genbase_pipeline, 256);
+             [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(matrix_words), 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(group_size, 1, 1)];
+             [encoder endEncoding];
+diff --git a/src/metal/matmul_accel_kernels.metal b/src/metal/matmul_accel_kernels.metal
+index d6f452d..690b03c 100644
+--- a/src/metal/matmul_accel_kernels.metal
++++ b/src/metal/matmul_accel_kernels.metal
+@@ -410,6 +410,102 @@ kernel void generate_base_matrix_from_seed(
+     output[gid] = oracle_from_seed(seed_internal, gid);
+ }
+ 
++// Oracle base-gen with a shared seed midstate. The 36-byte message (seed[32]+index[4]) is a
++// single SHA block; the seed (w[0..7]) is identical for every element, so rounds 0-7 yield a
++// constant post-round-7 state — computed once per threadgroup, then only rounds 8-63 run per
++// element. Byte-identical to generate_base_matrix_from_seed. Rare rejection falls back to the
++// reference oracle_from_seed (preserves the >= MODULUS retry path exactly).
++kernel void generate_base_matrix_from_seed_mid(
++    constant KernelParams& p [[buffer(0)]],
++    constant uchar* seed_internal [[buffer(1)]],
++    device uint* output [[buffer(2)]],
++    uint gid [[thread_position_in_grid]],
++    uint tid [[thread_index_in_threadgroup]])
++{
++    threadgroup uint sh_seed_w[8];
++    threadgroup uint sh_mid[8];
++    threadgroup uint sh_pre[9];
++    if (tid == 0u) {
++        thread uint w[16];
++        for (uint i = 0; i < 16; ++i) { w[i] = 0u; }
++        for (uint i = 0; i < 32; ++i) { set_oracle_byte(w, i, seed_internal[31u - i]); }
++        uint a = 0x6a09e667u, b = 0xbb67ae85u, c = 0x3c6ef372u, d = 0xa54ff53au,
++             e = 0x510e527fu, f = 0x9b05688cu, g = 0x1f83d9abu, h = 0x5be0cd19u;
++        for (uint t = 0; t < 8; ++t) {
++            const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t];
++            const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++            h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++        }
++        sh_mid[0]=a; sh_mid[1]=b; sh_mid[2]=c; sh_mid[3]=d;
++        sh_mid[4]=e; sh_mid[5]=f; sh_mid[6]=g; sh_mid[7]=h;
++        for (uint i = 0; i < 8; ++i) { sh_seed_w[i] = w[i]; }
++        // schedule terms w16..w22 depend only on the seed (first variable term is w23 via
++        // ssig0(w8)); precompute once, plus the constant partials of w23/w24.
++        {
++            const uint c9 = 0x80000000u, c15 = 36u * 8u; // w9, w15 constants; w10..w14 = 0
++            uint s16 = sha_ssig1(0u) + c9 + sha_ssig0(w[1]) + w[0];
++            uint s17 = sha_ssig1(c15) + 0u + sha_ssig0(w[2]) + w[1];
++            uint s18 = sha_ssig1(s16) + 0u + sha_ssig0(w[3]) + w[2];
++            uint s19 = sha_ssig1(s17) + 0u + sha_ssig0(w[4]) + w[3];
++            uint s20 = sha_ssig1(s18) + 0u + sha_ssig0(w[5]) + w[4];
++            uint s21 = sha_ssig1(s19) + 0u + sha_ssig0(w[6]) + w[5];
++            uint s22 = sha_ssig1(s20) + c15 + sha_ssig0(w[7]) + w[6];
++            sh_pre[0]=s16; sh_pre[1]=s17; sh_pre[2]=s18; sh_pre[3]=s19;
++            sh_pre[4]=s20; sh_pre[5]=s21; sh_pre[6]=s22;
++            sh_pre[7] = sha_ssig1(s21) + s16 + w[7];            // pc23: + ssig0(w8) per thread
++            sh_pre[8] = sha_ssig1(s22) + s17 + sha_ssig0(c9);   // pc24: + w8 per thread
++        }
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    const uint nn = p.n * p.n;
++    if (gid >= nn) { return; }
++    const uint index = gid;
++
++    // Rolling 16-word schedule (PR58 windowed-SHA): 16 live schedule words instead of 64 —
++    // big register-pressure / occupancy win on the hot oracle-gen kernel. Same math, byte-exact.
++    thread uint w[16];
++    for (uint i = 0; i < 8; ++i) { w[i] = sh_seed_w[i]; }
++    w[8] = ((index & 0xffu) << 24u) | (((index >> 8u) & 0xffu) << 16u)
++         | (((index >> 16u) & 0xffu) << 8u) | ((index >> 24u) & 0xffu);
++    w[9] = 0x80000000u;
++    w[10] = 0u; w[11] = 0u; w[12] = 0u; w[13] = 0u; w[14] = 0u;
++    w[15] = 36u * 8u;
++    uint a = sh_mid[0], b = sh_mid[1], c = sh_mid[2], d = sh_mid[3],
++         e = sh_mid[4], f = sh_mid[5], g = sh_mid[6], h = sh_mid[7];
++    // Full unroll so every w[t & 15] index is a compile-time constant — keeps the 16-word
++    // window in registers. (A dynamic-indexed loop spills the array and runs 2x slower.)
++#pragma clang loop unroll(full)
++    for (uint t = 8; t < 16; ++t) {
++        const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t & 15u];
++        const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++    }
++#pragma clang loop unroll(full)
++    for (uint t = 16; t < 23; ++t) {
++        w[t & 15u] = sh_pre[t - 16u];
++        const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t & 15u];
++        const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++    }
++#pragma clang loop unroll(full)
++    for (uint t = 23; t < 25; ++t) {
++        w[t & 15u] = (t == 23u) ? (sh_pre[7] + sha_ssig0(w[8])) : (sh_pre[8] + w[8]);
++        const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t & 15u];
++        const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++    }
++#pragma clang loop unroll(full)
++    for (uint t = 25; t < 64; ++t) {
++        w[t & 15u] = sha_ssig1(w[(t - 2u) & 15u]) + w[(t - 7u) & 15u]
++                   + sha_ssig0(w[(t - 15u) & 15u]) + w[(t - 16u) & 15u];
++        const uint t1 = h + sha_bsig1(e) + sha_ch(e, f, g) + SHA256_K[t] + w[t & 15u];
++        const uint t2 = sha_bsig0(a) + sha_maj(a, b, c);
++        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
++    }
++    const uint candidate = oracle_bswap32(0x6a09e667u + a) & MODULUS;
++    output[gid] = (candidate < MODULUS) ? candidate : oracle_from_seed(seed_internal, index);
++}
++
+ kernel void build_perturbed(
+     constant KernelParams& p [[buffer(0)]],
+     device const uint* matrix_a [[buffer(1)]],
+@@ -505,19 +601,25 @@ kernel void fused_final_compress(
+ 
+     threadgroup uint weighted_terms[MAX_BLOCK_ELEMENTS];
+     const uint weight = compress_vec[tid];
+-    uint c_acc = 0;
++    // Deferred M31 reduction: a,b are M31-reduced (< MODULUS), so each product a*b < 2^62 and FOUR
++    // fit in a 64-bit word (4*(2^31-2)^2 < 2^64). Accumulate 4 raw products per reduce64 instead of
++    // one per term (dot_step) — ~4x fewer reductions, the matmul's dominant op. The reduced partials
++    // (< MODULUS) sum into a 64-bit accumulator (< 2^44 total) and are reduced once at the end.
++    // Byte-exact: M31 addition is associative, so grouping the sum is identical to per-term add_mod.
++    ulong acc64 = 0;
++    ulong raw = 0;
++    uint grp = 0u;
+     for (uint ell = 0; ell < p.N; ++ell) {
+         const uint k_base = ell * p.b;
+-
+-        uint product = 0;
+         for (uint k = 0; k < p.b; ++k) {
+             const uint a = a_prime[row * p.n + (k_base + k)];
+             const uint b = b_prime[(k_base + k) * p.n + col];
+-            product = dot_step(product, a, b);
++            raw += (ulong)a * (ulong)b;
++            if ((++grp & 3u) == 0u) { acc64 += (ulong)reduce64(raw); raw = 0u; }
+         }
+-
+-        c_acc = add_mod(c_acc, product);
+     }
++    acc64 += (ulong)reduce64(raw);
++    const uint c_acc = reduce64(acc64);
+ 
+     weighted_terms[tid] = mul_mod(c_acc, weight);
+     const uint reduced = reduce_threadgroup_add_mod(weighted_terms, tid, block_elements);
+@@ -676,20 +778,34 @@ kernel void fused_final_compress_specialized(
+     const uint col = tile_j * b + bc;
+ 
+     threadgroup uint weighted_terms[MAX_BLOCK_ELEMENTS];
++    threadgroup uint tileA[2u * MAX_BLOCK_ELEMENTS];   // A' b×2b tile (2 k-blocks staged per barrier)
++    threadgroup uint tileB[2u * MAX_BLOCK_ELEMENTS];   // B' 2b×b tile
+     const uint weight = compress_vec[tid];
+-    uint c_acc = 0;
+-    for (uint ell = 0; ell < FC_SPEC_NBLOCKS; ++ell) {
+-        const uint k_base = ell * b;
+-
+-        uint product = 0;
+-        for (uint k = 0; k < FC_SPEC_B; ++k) {
+-            const uint a = a_prime[row * n + (k_base + k)];
+-            const uint b_val = b_prime[(k_base + k) * n + col];
+-            product = dot_step(product, a, b_val);
++    // Threadgroup-tiled matmul + deferred M31 reduction: each b×b threadgroup cooperatively stages TWO
++    // k-blocks of A' and B' into threadgroup memory per barrier (cuts redundant global reads ~b×), then
++    // accumulates 4 raw products per reduce64. Same k-order + reduction => byte-identical to the untiled
++    // path. (FC_SPEC_NBLOCKS is even for all shipped shapes: 512/16, 256/8, 64/4.)
++    ulong acc64 = 0;
++    ulong raw = 0;
++    uint grp = 0u;
++    const uint twob = 2u * FC_SPEC_B;
++    for (uint ell = 0; ell < FC_SPEC_NBLOCKS; ell += 2u) {
++        const uint kb = ell * b;
++        tileA[br * twob + bc]       = a_prime[row * n + (kb + bc)];
++        tileA[br * twob + b + bc]   = a_prime[row * n + (kb + b + bc)];
++        tileB[br * b + bc]          = b_prime[(kb + br) * n + col];
++        tileB[(b + br) * b + bc]    = b_prime[(kb + b + br) * n + col];
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++        for (uint k = 0; k < twob; ++k) {
++            const uint a = tileA[br * twob + k];
++            const uint b_val = tileB[k * b + bc];
++            raw += (ulong)a * (ulong)b_val;
++            if ((++grp & 3u) == 0u) { acc64 += (ulong)reduce64(raw); raw = 0u; }
+         }
+-
+-        c_acc = add_mod(c_acc, product);
++        threadgroup_barrier(mem_flags::mem_threadgroup);
+     }
++    acc64 += (ulong)reduce64(raw);
++    const uint c_acc = reduce64(acc64);
+ 
+     weighted_terms[tid] = mul_mod(c_acc, weight);
+     const uint reduced = reduce_threadgroup_add_mod(weighted_terms, tid, block_elements);
+diff --git a/src/metal/oracle_accel.mm b/src/metal/oracle_accel.mm
+index 2a4e32e..6f584c2 100644
+--- a/src/metal/oracle_accel.mm
++++ b/src/metal/oracle_accel.mm
+@@ -559,6 +559,176 @@ kernel void scan_nonce_seed_pre_hash(constant NonceSeedScanParams& p [[buffer(0)
+     out_flags[gid] = uint256_internal_bytes_less_or_equal(sigma, pre_hash_target) ? 1u : 0u;
+ }
+ 
++// --- Opt #3: block-0 SHA midstate for the scan's per-nonce hashes ---
++// Block 0 (first 64 message bytes) of the seed-v3 and header-hash messages is CONSTANT across all
++// nonces (nonce/which/seeds all land in block 1+). Compute the two block-0 midstates ONCE per
++// threadgroup, then per nonce compress only the remaining blocks. 8 SHA blocks/nonce -> 5. Byte-exact:
++// identical message bytes; only the constant block-0 compression is hoisted out of the per-nonce loop.
++
++inline void sha256_midstate0(thread uchar* message, thread uint state[8])
++{
++    // Compress block 0 only (message_len > 64 for our 118/150-byte messages, so block 0 is full data,
++    // no padding). Leaves `state` as the SHA chaining value after block 0.
++    sha256_init(state);
++    thread uint w[64];
++    for (uint i = 0; i < 64; ++i) { w[i] = 0u; }
++    for (uint word = 0; word < 16; ++word) {
++        uint packed = 0u;
++        for (uint byte = 0; byte < 4; ++byte) {
++            packed = (packed << 8u) | (uint)message[word * 4u + byte];
++        }
++        w[word] = packed;
++    }
++    sha256_compress(state, w);
++}
++
++inline void sha256_bytes_from_block(thread uchar* message, uint message_len, uint start_block,
++                                    thread uint state[8], thread uchar out[32])
++{
++    // Same byte/padding layout as sha256_bytes, but starts from `start_block` with a caller-supplied
++    // chaining `state` (the precomputed block-0 midstate). Blocks [0, start_block) are skipped.
++    const uint total_blocks = (message_len + 9u + 63u) / 64u;
++    const ulong bit_len = (ulong)message_len * 8u;
++    for (uint block = start_block; block < total_blocks; ++block) {
++        thread uint w[64];
++        for (uint i = 0; i < 64; ++i) { w[i] = 0u; }
++        for (uint word = 0; word < 16; ++word) {
++            uint packed = 0u;
++            for (uint byte = 0; byte < 4; ++byte) {
++                const uint message_index = block * 64u + word * 4u + byte;
++                uchar value = 0u;
++                if (message_index < message_len) {
++                    value = message[message_index];
++                } else if (message_index == message_len) {
++                    value = 0x80u;
++                } else {
++                    const uint length_start = total_blocks * 64u - 8u;
++                    if (message_index >= length_start) {
++                        const uint shift = (7u - (message_index - length_start)) * 8u;
++                        value = (uchar)((bit_len >> shift) & 0xffu);
++                    }
++                }
++                packed = (packed << 8u) | value;
++            }
++            w[word] = packed;
++        }
++        sha256_compress(state, w);
++    }
++    for (uint i = 0; i < 8; ++i) {
++        const uint word = state[i];
++        out[i * 4u + 0u] = (uchar)((word >> 24u) & 0xffu);
++        out[i * 4u + 1u] = (uchar)((word >> 16u) & 0xffu);
++        out[i * 4u + 2u] = (uchar)((word >> 8u) & 0xffu);
++        out[i * 4u + 3u] = (uchar)(word & 0xffu);
++    }
++}
++
++inline uint build_seed_v3_message(thread uchar* message, constant uchar* previous_block_hash,
++                                  constant uchar* merkle_root, ulong parent_median_time_past,
++                                  uint height, uint version, uint time, uint bits, ulong nonce,
++                                  ushort matmul_dim, uchar which)
++{
++    uint offset = 0u;
++    const uchar tag[18] = { 'B','T','X','_','M','A','T','M','U','L','_','S','E','E','D','_','V','3' };
++    append_byte(message, offset, 18u);
++    for (uint i = 0; i < 18u; ++i) { append_byte(message, offset, tag[i]); }
++    append_constant_bytes(message, offset, previous_block_hash, 32u);
++    append_le64(message, offset, parent_median_time_past);
++    append_le32(message, offset, height);
++    append_le32(message, offset, version);
++    append_constant_bytes(message, offset, merkle_root, 32u);
++    append_le32(message, offset, time);
++    append_le32(message, offset, bits);
++    append_le64(message, offset, nonce);
++    append_le16(message, offset, matmul_dim);
++    append_byte(message, offset, which);
++    return offset; // 118
++}
++
++inline uint build_header_message(thread uchar* message, uint version,
++                                 constant uchar* previous_block_hash, constant uchar* merkle_root,
++                                 uint time, uint bits, ulong nonce, ushort matmul_dim,
++                                 thread uchar* seed_a, thread uchar* seed_b)
++{
++    uint offset = 0u;
++    append_le32(message, offset, version);
++    append_constant_bytes(message, offset, previous_block_hash, 32u);
++    append_constant_bytes(message, offset, merkle_root, 32u);
++    append_le32(message, offset, time);
++    append_le32(message, offset, bits);
++    append_le64(message, offset, nonce);
++    append_le16(message, offset, matmul_dim);
++    append_thread_bytes(message, offset, seed_a, 32u);
++    append_thread_bytes(message, offset, seed_b, 32u);
++    return offset; // 150
++}
++
++kernel void scan_nonce_seed_pre_hash_mid(constant NonceSeedScanParams& p [[buffer(0)]],
++                                         constant uchar* previous_block_hash [[buffer(1)]],
++                                         constant uchar* merkle_root [[buffer(2)]],
++                                         constant uchar* pre_hash_target [[buffer(3)]],
++                                         device uint* out_flags [[buffer(4)]],
++                                         uint gid [[thread_position_in_grid]],
++                                         uint tid [[thread_index_in_threadgroup]])
++{
++    threadgroup uint sh_seed_mid[8];   // SHA state after seed-v3 block 0 (v3 only)
++    threadgroup uint sh_hdr_mid[8];    // SHA state after header-hash block 0
++    if (tid == 0u) {
++        thread uchar msg[160];
++        if (p.seed_version == 3u) {
++            build_seed_v3_message(msg, previous_block_hash, merkle_root, p.parent_median_time_past,
++                                  p.height, p.version, p.time, p.bits, 0ul, (ushort)p.matmul_dim, 0u);
++            thread uint st[8];
++            sha256_midstate0(msg, st);
++            for (uint i = 0; i < 8; ++i) { sh_seed_mid[i] = st[i]; }
++        }
++        thread uchar zero[32];
++        for (uint i = 0; i < 32; ++i) { zero[i] = 0u; }
++        build_header_message(msg, p.version, previous_block_hash, merkle_root, p.time, p.bits,
++                             0ul, (ushort)p.matmul_dim, zero, zero);
++        thread uint hst[8];
++        sha256_midstate0(msg, hst);
++        for (uint i = 0; i < 8; ++i) { sh_hdr_mid[i] = hst[i]; }
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++
++    if (gid >= p.scan_count) {
++        return;
++    }
++    const ulong nonce = p.start_nonce + (ulong)gid;
++    thread uchar seed_a[32];
++    thread uchar seed_b[32];
++    thread uchar header_hash[32];
++    thread uchar sigma[32];
++
++    if (p.seed_version == 3u) {
++        thread uchar msg[160];
++        const uint slen = build_seed_v3_message(msg, previous_block_hash, merkle_root,
++                                                p.parent_median_time_past, p.height, p.version,
++                                                p.time, p.bits, nonce, (ushort)p.matmul_dim, 0u);
++        thread uint st[8];
++        for (uint i = 0; i < 8; ++i) { st[i] = sh_seed_mid[i]; }
++        sha256_bytes_from_block(msg, slen, 1u, st, seed_a);
++        msg[117] = 1u;  // `which` byte (offset 117, in block 1); flip 0->1 for seed_b, reuse midstate
++        for (uint i = 0; i < 8; ++i) { st[i] = sh_seed_mid[i]; }
++        sha256_bytes_from_block(msg, slen, 1u, st, seed_b);
++    } else {
++        compute_matmul_seed_v2(previous_block_hash, merkle_root, p.height, p.version, p.time, p.bits,
++                               nonce, (ushort)p.matmul_dim, 0u, seed_a);
++        compute_matmul_seed_v2(previous_block_hash, merkle_root, p.height, p.version, p.time, p.bits,
++                               nonce, (ushort)p.matmul_dim, 1u, seed_b);
++    }
++
++    thread uchar hmsg[160];
++    const uint hlen = build_header_message(hmsg, p.version, previous_block_hash, merkle_root, p.time,
++                                           p.bits, nonce, (ushort)p.matmul_dim, seed_a, seed_b);
++    thread uint hst[8];
++    for (uint i = 0; i < 8; ++i) { hst[i] = sh_hdr_mid[i]; }
++    sha256_bytes_from_block(hmsg, hlen, 1u, hst, header_hash);
++    sha256_bytes(header_hash, 32u, sigma);
++    out_flags[gid] = uint256_internal_bytes_less_or_equal(sigma, pre_hash_target) ? 1u : 0u;
++}
++
+ kernel void generate_oracle_noise_vectors(constant OracleParams& p [[buffer(0)]],
+                                           constant uchar* seed_el [[buffer(1)]],
+                                           constant uchar* seed_er [[buffer(2)]],
+@@ -599,6 +769,7 @@ struct MetalContext {
+     id<MTLComputePipelineState> oracle_noise_pipeline{nil};
+     id<MTLComputePipelineState> oracle_vector_pipeline{nil};
+     id<MTLComputePipelineState> nonce_seed_scan_pipeline{nil};
++    id<MTLComputePipelineState> nonce_seed_scan_mid_pipeline{nil};
+     std::mutex pool_mutex;
+     id<MTLBuffer> pool_out_e_l{nil};
+     id<MTLBuffer> pool_out_e_r{nil};
+@@ -653,6 +824,7 @@ struct MetalContext {
+         oracle_noise_pipeline = nil;
+         oracle_vector_pipeline = nil;
+         nonce_seed_scan_pipeline = nil;
++        nonce_seed_scan_mid_pipeline = nil;
+         pool_out_e_l = nil;
+         pool_out_e_r = nil;
+         pool_out_f_l = nil;
+@@ -761,6 +933,14 @@ struct MetalContext {
+                 return;
+             }
+ 
++            // Opt #3: block-0 SHA-midstate scan variant (8 -> 5 SHA blocks/nonce). Non-fatal: if the
++            // kernel is absent (e.g. stale embedded fallback library), keep nil and use the base scan.
++            id<MTLFunction> nonce_seed_scan_mid_function = [library newFunctionWithName:@"scan_nonce_seed_pre_hash_mid"];
++            if (nonce_seed_scan_mid_function != nil) {
++                NSError* mid_pipeline_error = nil;
++                nonce_seed_scan_mid_pipeline = [device newComputePipelineStateWithFunction:nonce_seed_scan_mid_function error:&mid_pipeline_error];
++            }
++
+             ready = true;
+             profile.available = true;
+             profile.library_source = using_precompiled_library ? "precompiled_metallib" : "inline_source_fallback";
+@@ -1177,13 +1357,21 @@ MatMulNonceSeedPreHashScanResult ScanMatMulNonceSeedPreHashGPU(
+             0U,
+         };
+ 
+-        [encoder setComputePipelineState:context.nonce_seed_scan_pipeline];
++        // Opt #3: prefer the block-0 SHA-midstate scan kernel when available (8 -> 5 SHA blocks/nonce).
++        // BTX_SCAN_NO_MIDSTATE forces the base kernel for A/B. Falls back to base if the mid pipeline
++        // is nil (kernel absent in the loaded library).
++        static const bool scan_no_midstate = std::getenv("BTX_SCAN_NO_MIDSTATE") != nullptr;
++        id<MTLComputePipelineState> scan_pipeline =
++            (!scan_no_midstate && context.nonce_seed_scan_mid_pipeline != nil)
++                ? context.nonce_seed_scan_mid_pipeline
++                : context.nonce_seed_scan_pipeline;
++        [encoder setComputePipelineState:scan_pipeline];
+         [encoder setBytes:&scan_params length:sizeof(scan_params) atIndex:0];
+         [encoder setBytes:request.previous_block_hash.data() length:uint256::size() atIndex:1];
+         [encoder setBytes:request.merkle_root.data() length:uint256::size() atIndex:2];
+         [encoder setBytes:request.pre_hash_target.data() length:uint256::size() atIndex:3];
+         [encoder setBuffer:context.pool_scan_flags offset:0 atIndex:4];
+-        const NSUInteger group_size = SelectThreadGroupSize(context.nonce_seed_scan_pipeline, 256);
++        const NSUInteger group_size = SelectThreadGroupSize(scan_pipeline, 256);
+         [encoder dispatchThreads:MTLSizeMake(request.scan_count, 1, 1)
+             threadsPerThreadgroup:MTLSizeMake(group_size, 1, 1)];
+         [encoder endEncoding];
+diff --git a/src/metal/oracle_accel_kernels.metal b/src/metal/oracle_accel_kernels.metal
+index d220ac7..b35bcf5 100644
+--- a/src/metal/oracle_accel_kernels.metal
++++ b/src/metal/oracle_accel_kernels.metal
+@@ -476,6 +476,176 @@ kernel void scan_nonce_seed_pre_hash(constant NonceSeedScanParams& p [[buffer(0)
+     out_flags[gid] = uint256_internal_bytes_less_or_equal(sigma, pre_hash_target) ? 1u : 0u;
+ }
+ 
++// --- Opt #3: block-0 SHA midstate for the scan's per-nonce hashes ---
++// Block 0 (first 64 message bytes) of the seed-v3 and header-hash messages is CONSTANT across all
++// nonces (nonce/which/seeds all land in block 1+). Compute the two block-0 midstates ONCE per
++// threadgroup, then per nonce compress only the remaining blocks. 8 SHA blocks/nonce -> 5. Byte-exact:
++// identical message bytes; only the constant block-0 compression is hoisted out of the per-nonce loop.
++
++inline void sha256_midstate0(thread uchar* message, thread uint state[8])
++{
++    // Compress block 0 only (message_len > 64 for our 118/150-byte messages, so block 0 is full data,
++    // no padding). Leaves `state` as the SHA chaining value after block 0.
++    sha256_init(state);
++    thread uint w[64];
++    for (uint i = 0; i < 64; ++i) { w[i] = 0u; }
++    for (uint word = 0; word < 16; ++word) {
++        uint packed = 0u;
++        for (uint byte = 0; byte < 4; ++byte) {
++            packed = (packed << 8u) | (uint)message[word * 4u + byte];
++        }
++        w[word] = packed;
++    }
++    sha256_compress(state, w);
++}
++
++inline void sha256_bytes_from_block(thread uchar* message, uint message_len, uint start_block,
++                                    thread uint state[8], thread uchar out[32])
++{
++    // Same byte/padding layout as sha256_bytes, but starts from `start_block` with a caller-supplied
++    // chaining `state` (the precomputed block-0 midstate). Blocks [0, start_block) are skipped.
++    const uint total_blocks = (message_len + 9u + 63u) / 64u;
++    const ulong bit_len = (ulong)message_len * 8u;
++    for (uint block = start_block; block < total_blocks; ++block) {
++        thread uint w[64];
++        for (uint i = 0; i < 64; ++i) { w[i] = 0u; }
++        for (uint word = 0; word < 16; ++word) {
++            uint packed = 0u;
++            for (uint byte = 0; byte < 4; ++byte) {
++                const uint message_index = block * 64u + word * 4u + byte;
++                uchar value = 0u;
++                if (message_index < message_len) {
++                    value = message[message_index];
++                } else if (message_index == message_len) {
++                    value = 0x80u;
++                } else {
++                    const uint length_start = total_blocks * 64u - 8u;
++                    if (message_index >= length_start) {
++                        const uint shift = (7u - (message_index - length_start)) * 8u;
++                        value = (uchar)((bit_len >> shift) & 0xffu);
++                    }
++                }
++                packed = (packed << 8u) | value;
++            }
++            w[word] = packed;
++        }
++        sha256_compress(state, w);
++    }
++    for (uint i = 0; i < 8; ++i) {
++        const uint word = state[i];
++        out[i * 4u + 0u] = (uchar)((word >> 24u) & 0xffu);
++        out[i * 4u + 1u] = (uchar)((word >> 16u) & 0xffu);
++        out[i * 4u + 2u] = (uchar)((word >> 8u) & 0xffu);
++        out[i * 4u + 3u] = (uchar)(word & 0xffu);
++    }
++}
++
++inline uint build_seed_v3_message(thread uchar* message, constant uchar* previous_block_hash,
++                                  constant uchar* merkle_root, ulong parent_median_time_past,
++                                  uint height, uint version, uint time, uint bits, ulong nonce,
++                                  ushort matmul_dim, uchar which)
++{
++    uint offset = 0u;
++    const uchar tag[18] = { 'B','T','X','_','M','A','T','M','U','L','_','S','E','E','D','_','V','3' };
++    append_byte(message, offset, 18u);
++    for (uint i = 0; i < 18u; ++i) { append_byte(message, offset, tag[i]); }
++    append_constant_bytes(message, offset, previous_block_hash, 32u);
++    append_le64(message, offset, parent_median_time_past);
++    append_le32(message, offset, height);
++    append_le32(message, offset, version);
++    append_constant_bytes(message, offset, merkle_root, 32u);
++    append_le32(message, offset, time);
++    append_le32(message, offset, bits);
++    append_le64(message, offset, nonce);
++    append_le16(message, offset, matmul_dim);
++    append_byte(message, offset, which);
++    return offset; // 118
++}
++
++inline uint build_header_message(thread uchar* message, uint version,
++                                 constant uchar* previous_block_hash, constant uchar* merkle_root,
++                                 uint time, uint bits, ulong nonce, ushort matmul_dim,
++                                 thread uchar* seed_a, thread uchar* seed_b)
++{
++    uint offset = 0u;
++    append_le32(message, offset, version);
++    append_constant_bytes(message, offset, previous_block_hash, 32u);
++    append_constant_bytes(message, offset, merkle_root, 32u);
++    append_le32(message, offset, time);
++    append_le32(message, offset, bits);
++    append_le64(message, offset, nonce);
++    append_le16(message, offset, matmul_dim);
++    append_thread_bytes(message, offset, seed_a, 32u);
++    append_thread_bytes(message, offset, seed_b, 32u);
++    return offset; // 150
++}
++
++kernel void scan_nonce_seed_pre_hash_mid(constant NonceSeedScanParams& p [[buffer(0)]],
++                                         constant uchar* previous_block_hash [[buffer(1)]],
++                                         constant uchar* merkle_root [[buffer(2)]],
++                                         constant uchar* pre_hash_target [[buffer(3)]],
++                                         device uint* out_flags [[buffer(4)]],
++                                         uint gid [[thread_position_in_grid]],
++                                         uint tid [[thread_index_in_threadgroup]])
++{
++    threadgroup uint sh_seed_mid[8];   // SHA state after seed-v3 block 0 (v3 only)
++    threadgroup uint sh_hdr_mid[8];    // SHA state after header-hash block 0
++    if (tid == 0u) {
++        thread uchar msg[160];
++        if (p.seed_version == 3u) {
++            build_seed_v3_message(msg, previous_block_hash, merkle_root, p.parent_median_time_past,
++                                  p.height, p.version, p.time, p.bits, 0ul, (ushort)p.matmul_dim, 0u);
++            thread uint st[8];
++            sha256_midstate0(msg, st);
++            for (uint i = 0; i < 8; ++i) { sh_seed_mid[i] = st[i]; }
++        }
++        thread uchar zero[32];
++        for (uint i = 0; i < 32; ++i) { zero[i] = 0u; }
++        build_header_message(msg, p.version, previous_block_hash, merkle_root, p.time, p.bits,
++                             0ul, (ushort)p.matmul_dim, zero, zero);
++        thread uint hst[8];
++        sha256_midstate0(msg, hst);
++        for (uint i = 0; i < 8; ++i) { sh_hdr_mid[i] = hst[i]; }
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++
++    if (gid >= p.scan_count) {
++        return;
++    }
++    const ulong nonce = p.start_nonce + (ulong)gid;
++    thread uchar seed_a[32];
++    thread uchar seed_b[32];
++    thread uchar header_hash[32];
++    thread uchar sigma[32];
++
++    if (p.seed_version == 3u) {
++        thread uchar msg[160];
++        const uint slen = build_seed_v3_message(msg, previous_block_hash, merkle_root,
++                                                p.parent_median_time_past, p.height, p.version,
++                                                p.time, p.bits, nonce, (ushort)p.matmul_dim, 0u);
++        thread uint st[8];
++        for (uint i = 0; i < 8; ++i) { st[i] = sh_seed_mid[i]; }
++        sha256_bytes_from_block(msg, slen, 1u, st, seed_a);
++        msg[117] = 1u;  // `which` byte (offset 117, in block 1); flip 0->1 for seed_b, reuse midstate
++        for (uint i = 0; i < 8; ++i) { st[i] = sh_seed_mid[i]; }
++        sha256_bytes_from_block(msg, slen, 1u, st, seed_b);
++    } else {
++        compute_matmul_seed_v2(previous_block_hash, merkle_root, p.height, p.version, p.time, p.bits,
++                               nonce, (ushort)p.matmul_dim, 0u, seed_a);
++        compute_matmul_seed_v2(previous_block_hash, merkle_root, p.height, p.version, p.time, p.bits,
++                               nonce, (ushort)p.matmul_dim, 1u, seed_b);
++    }
++
++    thread uchar hmsg[160];
++    const uint hlen = build_header_message(hmsg, p.version, previous_block_hash, merkle_root, p.time,
++                                           p.bits, nonce, (ushort)p.matmul_dim, seed_a, seed_b);
++    thread uint hst[8];
++    for (uint i = 0; i < 8; ++i) { hst[i] = sh_hdr_mid[i]; }
++    sha256_bytes_from_block(hmsg, hlen, 1u, hst, header_hash);
++    sha256_bytes(header_hash, 32u, sigma);
++    out_flags[gid] = uint256_internal_bytes_less_or_equal(sigma, pre_hash_target) ? 1u : 0u;
++}
++
+ kernel void generate_oracle_noise_vectors(constant OracleParams& p [[buffer(0)]],
+                                           constant uchar* seed_el [[buffer(1)]],
+                                           constant uchar* seed_er [[buffer(2)]],
