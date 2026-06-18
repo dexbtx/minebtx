@@ -24,6 +24,18 @@ payout_address: "btx1z...YOUR_BTX_ADDRESS_HERE..."
 # Don't put your real name here — anyone can see it on the dashboard.
 worker_name: "default"
 
+# ─── Payout splits (optional) ──────────────────────────────────────────────
+# Redirect a cut of THIS rig's earnings to other addresses; the remainder
+# stays with payout_address. Each entry is a fee leg {address, pct}. Declared
+# one-shot in mining.subscribe; the pool honors it ONLY for this session's own
+# credits (you can only split your own earnings). Sum of pct must be <= 20
+# (pool cap) or the whole declaration is ignored. Leave empty for none.
+# Example — you run a friend's rig and take a 10% cut: point payout_address at
+# the friend and declare your 10% leg here:
+#   payout_splits:
+#     - { address: "btx1z...OPERATOR...", pct: 10 }
+payout_splits: []
+
 # ─── Solver binary ───────────────────────────────────────────────────────
 # Path to btx-gbt-solve. install.sh drops it at this default location.
 gbt_solve_path: "~/.dexbtx-miner/bin/btx-gbt-solve"

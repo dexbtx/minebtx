@@ -57,7 +57,7 @@ EXPECTED_SHA256="${EXPECTED_SHA256:-70f16afdd0be23cbf94858196d9fa5d1c8fade46c1fb
 # Darwin arm64 (Apple Silicon + Metal) solver pin. Fill in after the first green
 # build-solver-macos-arm64 CI run (the workflow prints the sha256). Until then,
 # macOS installs intentionally fail rather than install an unverified binary.
-DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-361abdad3880fe8be4ff470c29238c90303c6bd78dcac3b15643607fc369002c}"
+DARWIN_ARM64_SHA256="${DARWIN_ARM64_SHA256:-e1a62964592146ec6712c9572bccfeed3886c4a1bc8660f232edbced6192658f}"
 # Linux aarch64 (Grace / GB10 Blackwell etc.) CUDA solver pins. Default CUDA
 # toolkit variant is cuda12; set DEXBTX_CUDA=cuda13 for newer-driver hosts.
 AARCH64_CUDA12_SHA256="${AARCH64_CUDA12_SHA256:-72f083c22704dcac683ac324bd2183ccb2c35a7fa60d847345c15757f3f0b625}"
@@ -165,7 +165,10 @@ Options: (1) force the NVIDIA/CPU x86_64 build with DEXBTX_GPU=none, or (2) buil
             err "macOS Intel (x86_64) is not supported — Apple Silicon (arm64) only."
         fi
         log "macOS Apple Silicon detected — using the Metal solver build (no NVIDIA path)."
-        SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve-darwin-arm64"
+        # v0.4.20 unifies the darwin asset: both fresh install and channel
+        # auto-upgrade now point at the opt135 embedded-KERNEL_SOURCE build
+        # (was the older btx-gbt-solve-darwin-arm64 here vs target13 on channel).
+        SOLVER_URL="${PREBUILDS_BASE}/btx-gbt-solve-darwin-arm64-opt135"
         EXPECTED_SHA256="${DARWIN_ARM64_SHA256}"
         if [[ "$EXPECTED_SHA256" == "REPLACE_AFTER_FIRST_MACOS_BUILD" ]]; then
             err "macOS solver SHA pin not set yet. Run the build-solver-macos-arm64 workflow, publish the asset, then set DARWIN_ARM64_SHA256 (in install.sh or via env)."
@@ -287,7 +290,7 @@ else
     # GitHub keeps the install pinned to a specific release commit and
     # avoids a third-party package surface. Override DEXBTX_MINER_PKG_URL
     # to install from a fork or a different ref.
-    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.19.tar.gz}"
+    DEXBTX_MINER_PKG_URL="${DEXBTX_MINER_PKG_URL:-https://github.com/dexbtx/minebtx/archive/refs/tags/v0.4.20.tar.gz}"
     log "installing dexbtx-miner from ${DEXBTX_MINER_PKG_URL} (pip --user)..."
     pip_install --upgrade "$DEXBTX_MINER_PKG_URL"
 

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.20] - 2026-06-18 (GPU telemetry + payout-splits field, wrapper-wide; Metal solver Opt#1/#3/#5, arm64-darwin only)
+
+### What
+- **Wrapper (every platform).** Two additive wrapper features + version lockstep → `0.4.20` (`__init__.py`, `pyproject.toml`, `.solver-channel.json` `version`, `install.sh`):
+  - **GPU telemetry.** `hardware.py::_gpu_runtime` now queries `pstate`, `clocks.sm`, and `power.max_limit` (nvidia-smi) and reports `pstate`, `clocks_sm`, `power_limit_w`, `solver_nps`, plus a **latch detector** — `latched=true` when `util>=90%` AND `power_w < 50%` of the power limit (a clock-stuck GPU pinned in a low P-state). Surfaced in `worker_metrics`.
+  - **Payout-splits field.** New `payout_splits` config key lets a rig declare per-rig fee legs in its `mining.subscribe` hardware JSON. Pool-side ingest is **SHADOW** (stamps `workers.split_id`, writes audit rows; **no credit redirect** until `splits_enforce`). Dormant on the wrapper until the operator declares splits.
+  - NVIDIA `x86_64` + `aarch64` cuda12/cuda13 **solvers are UNCHANGED** from v0.4.17 (`70f16afd` / `72f083c2` / `a8d3728b`). The CUDA kernel was not touched; there is no new NVIDIA build. NVIDIA rigs get the new wrapper and keep their solver (re-check is a no-op).
+- **Solver (arm64-darwin only).** New Metal build: btx v0.32.11 source + **Metal Opt#1/#3/#5 + embedded-KERNEL_SOURCE re-sync** (`12-darwin-metal-opt135-embedded-sync.patch`). Published as `btx-gbt-solve-darwin-arm64-opt135`, sha `e1a62964…`. Channel `arm64-darwin` `url`+`sha256` flipped to it; `min_required` left at `361abdad` (**soft rollout**). `install.sh` now points both fresh-install and channel at the same opt135 asset (was split: `…-darwin-arm64` for install vs `…-target13` on channel).
+
+### Why
+- Telemetry: the latch detector + pstate/clocks/power give pool-side visibility into the GPU-saturation failure mode (P-state stuck low at high util) without host access.
+- Splits: ships the wrapper half of payout-splits dormant so operators can declare legs ahead of the pool-side `splits_enforce` flip.
+- Metal opt135: the fleet runs the **embedded** Metal kernel path (no `.metallib` shipped). CI now gates the embedded path as byte-exact vs the metallib build AND `>=1M nonce/s` (closes the v0.4.19-hotfix CI gap where a CPU-fallback binary could pass a digest-only KAT).
+
+### Propagation
+- Wrapper-only features reach running rigs **already on ≥0.4.19** with no restart (the v0.4.19 periodic `maybe_self_upgrade`). Rigs on <0.4.19 pick up 0.4.20 on their next restart.
+- Mac rigs auto-update to the opt135 solver via normal (non-forced) channel auto-update.
+
+### Validation
+- Telemetry validated on home-1070 (GTX 1070): NULL synced/-1 peers handled; `latched=true` confirmed under a real low-P-state pin.
+- Metal: KAT `cpu==metal==reference`; embedded-path digest byte-exact vs metallib; embedded V3 scan ~3.1M nonce/s; CI run `27784021448` green (embedded gate). Published asset re-downloaded + sha re-verified (`e1a62964…`).
+
 ## [0.4.19-darwin-hotfix2] - 2026-06-16 (arm64-darwin minos fix; manifest hotfix — NO wrapper change)
 
 ### What
