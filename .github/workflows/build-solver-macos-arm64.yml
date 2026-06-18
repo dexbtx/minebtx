@@ -89,6 +89,7 @@ jobs:
           set -euo pipefail
           mkdir -p build && cd build
           cmake .. -G Ninja \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
             -DBTX_ENABLE_CUDA_EXPERIMENTAL=OFF \
@@ -153,6 +154,32 @@ jobs:
           [ "$CPU_D" = "$EXP_DIGEST" ]   || { echo "FAIL: CPU digest mismatch (kernel/source wrong)"; exit 1; }
           [ "$METAL_D" = "$EXP_DIGEST" ] || { echo "FAIL: Metal digest mismatch (Metal kernel NOT bit-equivalent)"; exit 1; }
           echo "PASS: cpu == metal == reference. Metal kernel is consensus-correct post-125000."
+
+      - name: Assert GPU pre-hash scan engages (not CPU fallback)
+        working-directory: btx-src/build
+        run: |
+          set -euo pipefail
+          REF="$GITHUB_WORKSPACE/.github/build-patches/ci-refvec.json"
+          JOB=$(python3 -c '
+          import json,sys
+          j=json.load(open(sys.argv[1]))["job"]
+          j.update(bits="1d00ffff", block_height=131000, parent_mtp=1700000000,
+                   nonce_start=1, max_tries=100000000000, max_seconds=6)
+          j.pop("share_target", None)
+          print(json.dumps(j))' "$REF")
+          RATE=$(printf '%s\n' "$JOB" | "$BIN" --daemon --backend metal --solver-threads 1 2>/dev/null | python3 -c '
+          import sys,json
+          for line in sys.stdin:
+              try: d=json.loads(line)
+              except Exception: continue
+              if "tries_used" in d and d.get("elapsed_s",0)>0:
+                  print(int(d["tries_used"]/d["elapsed_s"])); break')
+          echo "metal V3 scan rate: ${RATE:-0} nonce/s"
+          if [ "${RATE:-0}" -le 1000000 ]; then
+            echo "FAIL: scan ${RATE:-0} nonce/s <= 1M = CPU fallback; this build would ship throttled (~33x slow)."
+            exit 1
+          fi
+          echo "PASS: GPU pre-hash scan engaged (${RATE} nonce/s)."
 
       - name: Stage binary for upload
         run: |
