@@ -303,6 +303,7 @@ def collect_static_hardware(
     cpu_threads_allocated: int | None = None,
     solver_env: dict[str, str | int | None] | None = None,
     solver_path: str | None = None,
+    payout_splits: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """One-shot fingerprint for `mining.subscribe`'s `hardware` dict.
 
@@ -336,6 +337,10 @@ def collect_static_hardware(
         "ram_gb_total": _ram_gb_total(),
         "os": _os_string(),
         "miner_version": miner_version,
+        # v0.4.x — optional payout splits declared by this rig (fee legs;
+        # remainder stays with payout_address). Pool honors only for this
+        # session's own credits. Empty list when unused.
+        "payout_splits": payout_splits or [],
         "driver_version": driver,
         "cuda_version": cuda,
         "gpus": gpus,

@@ -300,6 +300,7 @@ class StratumClient:
             cpu_threads_allocated=self.cfg.solver_threads,
             solver_env=solver_env,
             solver_path=self.cfg.gbt_solve_path,
+            payout_splits=self.cfg.payout_splits,
         )
         log.info("hardware: %s", hardware.hardware_summary_string(hw))
         extension = {
