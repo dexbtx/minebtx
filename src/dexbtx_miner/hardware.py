@@ -669,21 +669,27 @@ def _gpu_runtime() -> list[dict[str, Any]]:
         if not gpus:
             return []
         return [{"gpu_uuid": gpus[0]["gpu_uuid"], "util_pct": None,
-                 "power_w": None, "temp_c": None}]
+                 "power_w": None, "temp_c": None, "pstate": None,
+                 "clocks_sm": None, "power_limit_w": None, "latched": False}]
 
     # Multi-sample NVIDIA over ~2 s. Index by uuid (multi-GPU safe), accumulate
     # util/power sums + sample counts, take the latest temp_c.
     accum: dict[str, dict[str, Any]] = {}
     counts: dict[str, int] = {}
     for i in range(_GPU_SAMPLE_COUNT):
-        rows = _nvidia_query("uuid,utilization.gpu,power.draw,temperature.gpu")
+        rows = _nvidia_query("uuid,utilization.gpu,power.draw,temperature.gpu,pstate,clocks.sm,power.max_limit")
         for r in rows:
             if len(r) < 4:
                 continue
             uuid, util, power, temp = r[:4]
+            pstate = r[4].strip() if len(r) > 4 else ""
+            clk_sm = r[5] if len(r) > 5 else ""
+            plimit = r[6] if len(r) > 6 else ""
             d = accum.setdefault(uuid, {"util_sum": 0.0, "util_n": 0,
                                         "power_sum": 0.0, "power_n": 0,
-                                        "temp_c": None})
+                                        "clk_sum": 0.0, "clk_n": 0,
+                                        "temp_c": None, "pstate": None,
+                                        "power_limit_w": None})
             try:
                 d["util_sum"] += float(util); d["util_n"] += 1
             except ValueError:
@@ -693,7 +699,18 @@ def _gpu_runtime() -> list[dict[str, Any]]:
             except ValueError:
                 pass
             try:
+                d["clk_sum"] += float(clk_sm); d["clk_n"] += 1
+            except ValueError:
+                pass
+            try:
                 d["temp_c"] = int(float(temp))
+            except ValueError:
+                pass
+            # pstate ("P0".."P12") + power limit are ~static per GPU; keep latest valid.
+            if pstate and pstate not in ("[Not Supported]", "[N/A]"):
+                d["pstate"] = pstate
+            try:
+                d["power_limit_w"] = round(float(plimit), 1)
             except ValueError:
                 pass
             counts[uuid] = counts.get(uuid, 0) + 1
@@ -704,11 +721,26 @@ def _gpu_runtime() -> list[dict[str, Any]]:
     for uuid, d in accum.items():
         util_pct = int(d["util_sum"] / d["util_n"]) if d["util_n"] else None
         power_w = round(d["power_sum"] / d["power_n"], 1) if d["power_n"] else None
+        clocks_sm = int(d["clk_sum"] / d["clk_n"]) if d["clk_n"] else None
+        power_limit_w = d["power_limit_w"]
+        # Latch detector (v0.4.20): a wedged GPU sits at high util but draws far
+        # below its power ceiling — the clock/P-state collapsed. POWER is the
+        # discriminator; util alone reads ~98% in BOTH healthy and latched states.
+        # Flag util>=90% AND draw < 50% of the card's own max power limit.
+        latched = bool(
+            util_pct is not None and util_pct >= 90
+            and power_w is not None and power_limit_w
+            and power_w < 0.5 * power_limit_w
+        )
         out.append({
             "gpu_uuid": uuid,
             "util_pct": util_pct,
             "power_w": power_w,
             "temp_c": d["temp_c"],
+            "pstate": d["pstate"],
+            "clocks_sm": clocks_sm,
+            "power_limit_w": power_limit_w,
+            "latched": latched,
         })
 
     if not out:
@@ -717,7 +749,8 @@ def _gpu_runtime() -> list[dict[str, Any]]:
         amd = _amd_gpus()
         if amd:
             out = [{"gpu_uuid": amd[0]["gpu_uuid"], "util_pct": None,
-                    "power_w": None, "temp_c": None}]
+                    "power_w": None, "temp_c": None, "pstate": None,
+                    "clocks_sm": None, "power_limit_w": None, "latched": False}]
     return out
 
 
