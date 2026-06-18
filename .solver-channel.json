@@ -33,11 +33,11 @@
       "notes": "Opt-in via DEXBTX_PLATFORM_KEY=aarch64-linux-cuda13. btx v0.32.11 + SIGUSR1 tip-preempt. CUDA 13.0, archs sm_80;sm_90;sm_120;sm_121. Covers GB10/Spark + RTX Blackwell consumer needing a CUDA-13 runtime. Built via build-solver-aarch64.yml."
     },
     "arm64-darwin": {
-      "sha256": "ee83d3fc846c7ecefdd3490a8f30b3f1294e274299d1b534b4c6245f709a40ba",
-      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11-preempt/btx-gbt-solve-darwin-arm64",
+      "sha256": "2a07afc5a193e01433fb4d6bdea961d530bc8f007848d0d6baa3d29aaaad8d51",
+      "url": "https://github.com/dexbtx/minebtx/releases/download/btx-prebuilds-v0.32.11-preempt/btx-gbt-solve-darwin-arm64-target13",
       "min_required_sha256": "361abdad3880fe8be4ff470c29238c90303c6bd78dcac3b15643607fc369002c",
       "force_upgrade_reason": "MatMul-V3 fork at mainnet block 130,500 — pre-v0.32.10 solvers produce 100% invalid shares after the fork.",
-      "notes": "Apple Silicon Metal backend — REAL btx v0.32.11 source build (btxchain/btx e1e5673 + dexbtx 05-cmakelists patch + v0.4.17 SIGUSR1 preempt main; advertises {preempt:true}). Recovers the MatMul-V3 GPU pre-hash scan: the prior asset was carried from v0.32.10, whose V3 scan is half-wired so it fell back to the CPU per-nonce path post-block-130500 (~0.15M nonce/s); this source build engages the GPU scan (~5M nonce/s, ~33x). KAT cpu_digest==metal_digest==reference (h130000 V2); V3 bit-exact 64/64 distinct nonces @ h131000+parent_mtp; multi-hour live soak on APPLEM4-GOLF-1: accepted/0 rejected/0 code-23, GPU scan engaged. min_required left at the v0.32.10-carried sha for a soft rollout (download-failure falls back to the still-valid old binary); raise to this sha to force stragglers once uptake is confirmed."
+      "notes": "Apple Silicon Metal backend — REAL btx v0.32.11 source build (e1e5673 + 05-cmakelists patch + v0.4.17 SIGUSR1 preempt main), built with CMAKE_OSX_DEPLOYMENT_TARGET=13.0 so it loads on macOS Ventura 13+ (the prior ee83d3fc build was minos 26 and SIGABRT'd on launch on Sonoma/Ventura — dyld: missing libc++ symbol std::exception_ptr::__from_native_exception_pointer). minos 13.0, legacy libc++ exception ABI only. Recovers the MatMul-V3 GPU pre-hash scan (~0.15M->5M nonce/s, ~33x). KAT cpu==metal==reference; V3 scan 5.38M/s; multi-hour live soak on APPLEM4-GOLF-1 (0 rejected, 0 code-23). min_required left at 361abdad (soft rollout)."
     }
   }
 }

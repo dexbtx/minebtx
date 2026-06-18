@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.19-darwin-hotfix2] - 2026-06-16 (arm64-darwin minos fix; manifest hotfix — NO wrapper change)
+
+### What
+- `arm64-darwin` `sha256` -> `2a07afc5…`, `url` -> `btx-gbt-solve-darwin-arm64-target13`. Same v0.32.11 source solver as the previous hotfix, rebuilt with `CMAKE_OSX_DEPLOYMENT_TARGET=13.0` (minos 13.0 instead of 26.0).
+- Version unchanged 0.4.19; min_required unchanged (361abdad, soft); other platforms untouched.
+
+### Why
+The prior arm64-darwin build (`ee83d3fc`) was compiled on macOS 26 with no deployment target -> minos 26, hard-linking `std::exception_ptr::__from_native_exception_pointer`, a libc++ symbol absent on older macOS. It SIGABRT'd (exit 134) on launch on Sonoma/Ventura (dyld: Symbol not found). target=13.0 selects the legacy libc++ exception path, so the binary loads on Ventura 13+ while keeping the V3 GPU-scan + preempt. Diagnosed by easyBTX (Sonoma 14.2.1 / M1).
+
+### Validation
+minos 13.0 (otool); no `__from_native_exception_pointer` (nm -u); KAT cpu==metal==reference; V3 scan 5.38M nonce/s. Old-macOS launch confirmed by easyBTX/@Schwilling.
+
 ## [0.4.19-darwin-hotfix] - 2026-06-16 (arm64-darwin solver only; manifest hotfix — NO wrapper change)
 
 ### What
